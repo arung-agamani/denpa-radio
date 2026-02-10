@@ -34,3 +34,9 @@ go.work.sum
 
 # Denpa Radio directories
 music/
+data/*.json
+data/*.json.tmp
+
+# Frontend build artifacts
+web/node_modules/
+web/dist/

@@ -6,24 +6,34 @@ import (
 )
 
 type Config struct {
-	Port        string
-	MusicDir    string
-	Bitrate     string
-	StationName string
-	MaxClients  int
-	SampleRate  string
-	Channels    string
+	Port         string
+	MusicDir     string
+	Bitrate      string
+	StationName  string
+	MaxClients   int
+	SampleRate   string
+	Channels     string
+	PlaylistFile string
+	WebDir       string
+	DJUsername   string
+	DJPassword   string
+	JWTSecret    string
 }
 
 func Load() *Config {
 	return &Config{
-		Port:        getEnv("PORT", "8000"),
-		MusicDir:    getEnv("MUSIC_DIR", "./music"),
-		Bitrate:     getEnv("BITRATE", "128k"),
-		StationName: getEnv("STATION_NAME", "Denpa Radio"),
-		MaxClients:  getEnvAsInt("MAX_CLIENTS", 100),
-		SampleRate:  getEnv("SAMPLE_RATE", "44100"),
-		Channels:    getEnv("CHANNELS", "2"),
+		Port:         getEnv("PORT", "8000"),
+		MusicDir:     getEnv("MUSIC_DIR", "./music"),
+		Bitrate:      getEnv("BITRATE", "128k"),
+		StationName:  getEnv("STATION_NAME", "Denpa Radio"),
+		MaxClients:   getEnvAsInt("MAX_CLIENTS", 100),
+		SampleRate:   getEnv("SAMPLE_RATE", "44100"),
+		Channels:     getEnv("CHANNELS", "2"),
+		PlaylistFile: getEnv("PLAYLIST_FILE", "./data/playlists.json"),
+		WebDir:       getEnv("WEB_DIR", "./web/dist"),
+		DJUsername:   getEnv("DJ_USERNAME", "dj"),
+		DJPassword:   getEnv("DJ_PASSWORD", "denpa"),
+		JWTSecret:    getEnv("JWT_SECRET", "change-me-in-production-please"),
 	}
 }
 

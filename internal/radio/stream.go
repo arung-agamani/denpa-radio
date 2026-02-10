@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/arung-agamani/denpa-radio/internal/ffmpeg"
+	"github.com/arung-agamani/denpa-radio/internal/playlist"
 )
 
 // clientSub represents a single subscribed listener.
@@ -22,23 +23,59 @@ type clientSub struct {
 // resulting MP3 chunks out to every connected HTTP client.  It keeps playing
 // (advancing the playlist) even when zero clients are connected.
 type Broadcaster struct {
-	playlist *Playlist
-	encoder  *ffmpeg.Encoder
+	legacyPlaylist *Playlist
+	masterPlaylist *playlist.MasterPlaylist
+	encoder        *ffmpeg.Encoder
 
 	mu           sync.RWMutex
 	clients      map[uint64]*clientSub
 	nextID       uint64
-	currentTrack atomic.Value // stores string
+	currentTrack atomic.Value // stores string (file path)
 }
 
-func NewBroadcaster(playlist *Playlist, encoder *ffmpeg.Encoder) *Broadcaster {
+func NewBroadcaster(legacyPlaylist *Playlist, encoder *ffmpeg.Encoder) *Broadcaster {
 	b := &Broadcaster{
-		playlist: playlist,
-		encoder:  encoder,
-		clients:  make(map[uint64]*clientSub),
+		legacyPlaylist: legacyPlaylist,
+		encoder:        encoder,
+		clients:        make(map[uint64]*clientSub),
 	}
 	b.currentTrack.Store("")
 	return b
+}
+
+// SetMasterPlaylist configures the broadcaster to use the new MasterPlaylist
+// system for track resolution. When set, the legacy playlist is ignored.
+func (b *Broadcaster) SetMasterPlaylist(master *playlist.MasterPlaylist) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.masterPlaylist = master
+}
+
+// nextTrack returns the file path of the next track to play. It prefers the
+// MasterPlaylist if available, falling back to the legacy Playlist.
+func (b *Broadcaster) nextTrack() (string, bool) {
+	b.mu.RLock()
+	master := b.masterPlaylist
+	b.mu.RUnlock()
+
+	if master != nil {
+		track, _, err := master.Next()
+		if err != nil {
+			slog.Warn("MasterPlaylist.Next() error", "error", err)
+			return "", false
+		}
+		if track == nil {
+			return "", false
+		}
+		return track.FilePath, true
+	}
+
+	// Legacy fallback.
+	if b.legacyPlaylist != nil {
+		return b.legacyPlaylist.Next()
+	}
+
+	return "", false
 }
 
 // Start begins the continuous broadcast loop.  It blocks until ctx is
@@ -53,7 +90,7 @@ func (b *Broadcaster) Start(ctx context.Context) {
 		default:
 		}
 
-		track, ok := b.playlist.Next()
+		track, ok := b.nextTrack()
 		if !ok {
 			slog.Warn("Playlist empty, waiting before retry")
 			select {
@@ -124,11 +161,14 @@ func (b *Broadcaster) ActiveClients() int {
 	return len(b.clients)
 }
 
-// ReloadPlaylist triggers a hot-reload of the playlist, preserving position
-// relative to the currently playing track.
+// ReloadPlaylist triggers a hot-reload of the legacy playlist, preserving
+// position relative to the currently playing track.
 func (b *Broadcaster) ReloadPlaylist() error {
+	if b.legacyPlaylist == nil {
+		return nil
+	}
 	current := b.CurrentTrack()
-	return b.playlist.Reload(current)
+	return b.legacyPlaylist.Reload(current)
 }
 
 // ---------------------------------------------------------------------------
