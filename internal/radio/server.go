@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,12 @@ import (
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
 )
 
+// maxBodySize is the default maximum request body size (1 MB).
+const maxBodySize = 1 << 20
+
+// safeFilenameRe matches characters that are safe in Content-Disposition filenames.
+var safeFilenameRe = regexp.MustCompile(`[^a-zA-Z0-9_\-.]`)
+
 type Server struct {
 	config      *config.Config
 	master      *playlist.MasterPlaylist
@@ -27,6 +34,22 @@ type Server struct {
 	broadcaster *Broadcaster
 	auth        *auth.Auth
 	httpServer  *http.Server
+}
+
+// securityHeaders is middleware that adds standard security headers to every
+// response. These mitigate clickjacking, MIME-sniffing, XSS reflection, and
+// information leakage.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; font-src 'self'")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -51,16 +74,34 @@ func NewServer(cfg *config.Config) *Server {
 		}
 	}
 
+	// Apply timezone from config if the loaded master doesn't already have one
+	// persisted (env var acts as a default; persisted value takes precedence).
+	if master != nil && master.Timezone() == "" && cfg.Timezone != "" {
+		if tzErr := master.SetTimezone(cfg.Timezone); tzErr != nil {
+			slog.Warn("Invalid TIMEZONE from config, falling back to UTC",
+				"timezone", cfg.Timezone, "error", tzErr)
+		}
+	}
+
 	if master == nil {
 		// First run or load failure: scan music directory and create a default playlist.
 		master = playlist.NewMasterPlaylist()
 
-		defaultPl, err := playlist.BuildDefaultPlaylist(cfg.MusicDir)
+		// Apply timezone from config on first run.
+		if cfg.Timezone != "" {
+			if tzErr := master.SetTimezone(cfg.Timezone); tzErr != nil {
+				slog.Warn("Invalid TIMEZONE from config, falling back to UTC",
+					"timezone", cfg.Timezone, "error", tzErr)
+			}
+		}
+
+		defaultPl, err := playlist.BuildDefaultPlaylistWithLibrary(cfg.MusicDir, master.Library)
 		if err != nil {
 			slog.Warn("Failed to build default playlist from music directory",
 				"error", err)
 			// Create an empty master playlist so the server can still start.
 			defaultPl = playlist.NewPlaylist("Default Playlist", playlist.CurrentTimeTag())
+			defaultPl.SetLibrary(master.Library)
 		}
 
 		tag := defaultPl.Tag
@@ -75,6 +116,24 @@ func NewServer(cfg *config.Config) *Server {
 		if saveErr := store.Save(master); saveErr != nil {
 			slog.Error("Failed to save initial playlist", "error", saveErr)
 		}
+	} else {
+		// Existing master loaded — scan the music directory to pick up any
+		// new files and register them in the library with stable IDs.
+		if master.Library != nil {
+			_, added, scanErr := playlist.ScanIntoLibrary(cfg.MusicDir, master.Library)
+			if scanErr != nil {
+				slog.Warn("Failed to scan music directory into library", "error", scanErr)
+			} else if added > 0 {
+				slog.Info("Discovered new tracks during startup scan",
+					"newly_added", added,
+					"library_total", master.Library.Count(),
+				)
+				// Save so the new library entries are persisted.
+				if saveErr := store.Save(master); saveErr != nil {
+					slog.Error("Failed to save after startup scan", "error", saveErr)
+				}
+			}
+		}
 	}
 
 	// Set the active tag based on current time.
@@ -87,10 +146,12 @@ func NewServer(cfg *config.Config) *Server {
 
 	// Initialize auth.
 	authInstance := auth.New(auth.Config{
-		Username:  cfg.DJUsername,
-		Password:  cfg.DJPassword,
-		JWTSecret: cfg.JWTSecret,
-		TokenTTL:  24 * time.Hour,
+		Username:           cfg.DJUsername,
+		Password:           cfg.DJPassword,
+		JWTSecret:          cfg.JWTSecret,
+		TokenTTL:           24 * time.Hour,
+		MaxLoginAttempts:   5,
+		LoginWindowSeconds: 900, // 15 minutes
 	})
 
 	s := &Server{
@@ -127,10 +188,12 @@ func NewServer(cfg *config.Config) *Server {
 	mux.HandleFunc("GET /api/status", s.statusHandler)
 	mux.HandleFunc("GET /api/tracks", s.apiListTracks)
 	mux.HandleFunc("GET /api/tracks/{id}", s.apiGetTrack)
+	mux.HandleFunc("GET /api/tracks/search", s.apiSearchTracks)
 	mux.HandleFunc("GET /api/playlists", s.apiListPlaylists)
 	mux.HandleFunc("GET /api/playlists/{id}", s.apiGetPlaylist)
 	mux.HandleFunc("GET /api/master", s.apiGetMasterPlaylist)
 	mux.HandleFunc("GET /api/scheduler/status", s.apiSchedulerStatus)
+	mux.HandleFunc("GET /api/timezone", s.apiGetTimezone)
 
 	// --- Auth endpoint (no auth required) ---
 	mux.HandleFunc("POST /api/auth/login", s.apiLogin)
@@ -145,8 +208,11 @@ func NewServer(cfg *config.Config) *Server {
 	// Legacy reload
 	mux.HandleFunc("POST /playlist/reload", s.auth.MiddlewareFunc(s.legacyPlaylistReloadHandler))
 
-	// Track management
+	// Track library management
 	mux.HandleFunc("GET /api/tracks/orphaned", s.auth.MiddlewareFunc(s.apiListOrphanedTracks))
+	mux.HandleFunc("PUT /api/tracks/{id}", s.auth.MiddlewareFunc(s.apiUpdateTrack))
+	mux.HandleFunc("DELETE /api/tracks/{id}", s.auth.MiddlewareFunc(s.apiDeleteTrack))
+	mux.HandleFunc("POST /api/tracks/scan", s.auth.MiddlewareFunc(s.apiScanTracks))
 
 	// Playlist CRUD
 	mux.HandleFunc("POST /api/playlists", s.auth.MiddlewareFunc(s.apiCreatePlaylist))
@@ -170,15 +236,19 @@ func NewServer(cfg *config.Config) *Server {
 	// Reconcile / hot-reload
 	mux.HandleFunc("POST /api/reconcile", s.auth.MiddlewareFunc(s.apiReconcile))
 
+	// Timezone management
+	mux.HandleFunc("PUT /api/timezone", s.auth.MiddlewareFunc(s.apiSetTimezone))
+
 	// --- SPA static file serving (must be last) ---
 	mux.HandleFunc("/", s.spaHandler)
 
 	s.httpServer = &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 0, // No timeout for streaming
-		IdleTimeout:  60 * time.Second,
+		Addr:           ":" + cfg.Port,
+		Handler:        securityHeaders(mux),
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   0, // No timeout for streaming
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1 MB max header size
 	}
 
 	return s
@@ -220,33 +290,48 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) spaHandler(w http.ResponseWriter, r *http.Request) {
 	webDir := s.config.WebDir
 
+	// Resolve webDir to an absolute path for containment checks.
+	absWebDir, err := filepath.Abs(webDir)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "server configuration error")
+		return
+	}
+
 	// Determine the file path requested.
 	reqPath := r.URL.Path
 	if reqPath == "/" {
 		reqPath = "/index.html"
 	}
 
-	// Clean the path to prevent directory traversal.
+	// Clean the path and join with webDir.
 	cleanPath := filepath.Clean(reqPath)
-	filePath := filepath.Join(webDir, cleanPath)
+	filePath := filepath.Join(absWebDir, cleanPath)
+
+	// Resolve to absolute and verify the result is still within webDir.
+	// This prevents path traversal attacks (e.g. ../../etc/passwd).
+	absFilePath, err := filepath.Abs(filePath)
+	if err != nil || !strings.HasPrefix(absFilePath, absWebDir+string(filepath.Separator)) && absFilePath != absWebDir {
+		// Path escaped webDir — treat as SPA fallback or reject.
+		absFilePath = filepath.Join(absWebDir, "index.html")
+	}
 
 	// Check if the requested file exists and is not a directory.
-	info, err := os.Stat(filePath)
+	info, err := os.Stat(absFilePath)
 	if err == nil && !info.IsDir() {
-		http.ServeFile(w, r, filePath)
+		http.ServeFile(w, r, absFilePath)
 		return
 	}
 
 	// SPA fallback: serve index.html for any route the frontend router handles.
-	indexPath := filepath.Join(webDir, "index.html")
+	indexPath := filepath.Join(absWebDir, "index.html")
 	if _, err := os.Stat(indexPath); err != nil {
-		// No frontend build found at all. Return a helpful message.
+		// No frontend build found at all. Return a helpful message without
+		// leaking the server-side path.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "error",
-			"error":   "Frontend not built. Run 'bun run build' in the web/ directory.",
-			"web_dir": webDir,
+			"status": "error",
+			"error":  "Frontend not built. Run 'bun run build' in the web/ directory.",
 		})
 		return
 	}
@@ -286,6 +371,9 @@ func parseID(s string) (int64, error) {
 // ---------------------------------------------------------------------------
 
 func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
+	// Limit login request body to 4 KB to prevent abuse.
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -295,9 +383,29 @@ func (s *Server) apiLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := s.auth.Authenticate(body.Username, body.Password)
+	// Basic input validation — reject empty or excessively long credentials.
+	if len(body.Username) == 0 || len(body.Username) > 256 ||
+		len(body.Password) == 0 || len(body.Password) > 256 {
+		s.writeError(w, http.StatusBadRequest, "invalid credentials format")
+		return
+	}
+
+	token, err := s.auth.Authenticate(body.Username, body.Password, r.RemoteAddr)
 	if err != nil {
-		slog.Warn("Failed login attempt", "username", body.Username, "remote", r.RemoteAddr)
+		slog.Warn("Failed login attempt",
+			"remote", r.RemoteAddr,
+			"error_type", err.Error(),
+		)
+
+		if err == auth.ErrRateLimited {
+			remaining := s.auth.RemainingLockout(r.RemoteAddr)
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(remaining.Seconds())))
+			s.writeError(w, http.StatusTooManyRequests, "too many login attempts, please try again later")
+			return
+		}
+
+		// Intentionally generic error — do not reveal whether username or
+		// password was wrong.
 		s.writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -345,23 +453,40 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 		activePlaylistID = &activePl.ID
 	}
 
-	// Try to get current track info from the master playlist.
+	// Build a sanitised track info struct that does NOT expose the server
+	// file-system path to public consumers.
 	var currentTrackInfo interface{}
 	if currentTrackPath != "" {
-		for _, pl := range s.master.AllPlaylists() {
-			if t, _, err := pl.FindTrackByFilePath(currentTrackPath); err == nil {
-				currentTrackInfo = t
-				break
+		// Try library first.
+		if s.master.Library != nil {
+			t := s.master.Library.GetByFilePath(currentTrackPath)
+			if t != nil {
+				currentTrackInfo = sanitiseTrack(t)
 			}
 		}
+		// Fallback: search playlists.
+		if currentTrackInfo == nil {
+			for _, pl := range s.master.AllPlaylists() {
+				if t, _, err := pl.FindTrackByFilePath(currentTrackPath); err == nil {
+					currentTrackInfo = sanitiseTrack(t)
+					break
+				}
+			}
+		}
+	}
+
+	loc := s.master.Location()
+	tz := s.master.Timezone()
+	if tz == "" {
+		tz = "UTC"
 	}
 
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"station_name":       s.config.StationName,
 		"current_track":      trackName,
-		"current_track_path": currentTrackPath,
 		"current_track_info": currentTrackInfo,
 		"total_tracks":       s.master.TotalTracks(),
+		"library_tracks":     s.master.LibraryTrackCount(),
 		"active_clients":     s.broadcaster.ActiveClients(),
 		"max_clients":        s.config.MaxClients,
 		"active_tag":         activeTag,
@@ -369,6 +494,8 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 		"active_playlist_id": activePlaylistID,
 		"scheduler_running":  s.scheduler.Running(),
 		"playlist_summary":   s.master.Summary(),
+		"timezone":           tz,
+		"server_time":        time.Now().In(loc).Format(time.RFC3339),
 	})
 }
 
@@ -452,24 +579,49 @@ func (s *Server) legacyPlaylistReloadHandler(w http.ResponseWriter, r *http.Requ
 // ---------------------------------------------------------------------------
 
 func (s *Server) apiListTracks(w http.ResponseWriter, r *http.Request) {
-	tracks := s.master.AllTracksDeduped()
+	var tracks []*playlist.Track
+	if s.master.Library != nil {
+		tracks = s.master.Library.List()
+	} else {
+		tracks = s.master.AllTracksDeduped()
+	}
+	sanitised := sanitiseTracks(tracks)
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":        "ok",
+		"total_tracks":  len(sanitised),
+		"tracks":        sanitised,
+		"library_total": s.master.LibraryTrackCount(),
+	})
+}
+
+func (s *Server) apiSearchTracks(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	if s.master.Library == nil {
+		s.writeError(w, http.StatusInternalServerError, "track library not initialised")
+		return
+	}
+	results := s.master.Library.Search(query)
+	sanitised := sanitiseTracks(results)
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":       "ok",
-		"total_tracks": len(tracks),
-		"tracks":       tracks,
+		"query":        query,
+		"total_tracks": len(sanitised),
+		"tracks":       sanitised,
 	})
 }
 
 func (s *Server) apiListOrphanedTracks(w http.ResponseWriter, r *http.Request) {
 	orphaned, err := playlist.FindOrphanedTracks(s.config.MusicDir, s.master)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("Failed to find orphaned tracks", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to scan music directory")
 		return
 	}
+	sanitised := sanitiseTracks(orphaned)
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":       "ok",
-		"total_tracks": len(orphaned),
-		"tracks":       orphaned,
+		"total_tracks": len(sanitised),
+		"tracks":       sanitised,
 	})
 }
 
@@ -481,18 +633,138 @@ func (s *Server) apiGetTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Search all playlists for this track.
+	// Look up in the library first (preferred).
+	if s.master.Library != nil {
+		track := s.master.Library.GetByID(id)
+		if track != nil {
+			s.writeJSON(w, http.StatusOK, map[string]interface{}{
+				"status": "ok",
+				"track":  sanitiseTrack(track),
+			})
+			return
+		}
+	}
+
+	// Fallback: search all playlists.
 	for _, pl := range s.master.AllPlaylists() {
 		if track, _, err := pl.FindTrackByID(id); err == nil {
 			s.writeJSON(w, http.StatusOK, map[string]interface{}{
 				"status": "ok",
-				"track":  track,
+				"track":  sanitiseTrack(track),
 			})
 			return
 		}
 	}
 
 	s.writeError(w, http.StatusNotFound, fmt.Sprintf("track %d not found", id))
+}
+
+// ---------------------------------------------------------------------------
+// Track Library management (protected)
+// ---------------------------------------------------------------------------
+
+func (s *Server) apiUpdateTrack(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
+	idStr := r.PathValue("id")
+	id, err := parseID(idStr)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid track ID")
+		return
+	}
+
+	if s.master.Library == nil {
+		s.writeError(w, http.StatusInternalServerError, "track library not initialised")
+		return
+	}
+
+	var upd playlist.TrackUpdate
+	if err := json.NewDecoder(r.Body).Decode(&upd); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	track, err := s.master.Library.Update(id, upd)
+	if err != nil {
+		s.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	s.saveState()
+
+	slog.Info("Track metadata updated via library",
+		"track_id", id,
+		"title", track.Title,
+	)
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "ok",
+		"track":  sanitiseTrack(track),
+	})
+}
+
+func (s *Server) apiDeleteTrack(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := parseID(idStr)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid track ID")
+		return
+	}
+
+	if s.master.Library == nil {
+		s.writeError(w, http.StatusInternalServerError, "track library not initialised")
+		return
+	}
+
+	track := s.master.Library.GetByID(id)
+	if track == nil {
+		s.writeError(w, http.StatusNotFound, fmt.Sprintf("track %d not found in library", id))
+		return
+	}
+
+	// Remove from all playlists first.
+	playlistRemovals := s.master.RemoveTrackFromAll(track.Checksum)
+
+	// Remove from library.
+	s.master.Library.RemoveByID(id)
+
+	s.saveState()
+
+	slog.Info("Track deleted from library",
+		"track_id", id,
+		"title", track.Title,
+		"playlist_removals", playlistRemovals,
+	)
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":            "ok",
+		"message":           fmt.Sprintf("track %d removed from library and %d playlist(s)", id, playlistRemovals),
+		"playlist_removals": playlistRemovals,
+	})
+}
+
+func (s *Server) apiScanTracks(w http.ResponseWriter, r *http.Request) {
+	if s.master.Library == nil {
+		s.writeError(w, http.StatusInternalServerError, "track library not initialised")
+		return
+	}
+
+	slog.Info("Track library scan requested", "remote", r.RemoteAddr)
+
+	_, added, err := playlist.ScanIntoLibrary(s.config.MusicDir, s.master.Library)
+	if err != nil {
+		slog.Error("Library scan failed", "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to scan music directory")
+		return
+	}
+
+	s.saveState()
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":        "ok",
+		"newly_added":   added,
+		"library_total": s.master.Library.Count(),
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +798,8 @@ func (s *Server) apiListPlaylists(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiCreatePlaylist(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
 	var body struct {
 		Name string `json:"name"`
 		Tag  string `json:"tag"`
@@ -583,6 +857,8 @@ func (s *Server) apiGetPlaylist(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiUpdatePlaylist(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
 	idStr := r.PathValue("id")
 	id, err := parseID(idStr)
 	if err != nil {
@@ -670,6 +946,8 @@ func (s *Server) apiDeletePlaylist(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (s *Server) apiAddTrackToPlaylist(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
 	idStr := r.PathValue("id")
 	plID, err := parseID(idStr)
 	if err != nil {
@@ -679,7 +957,7 @@ func (s *Server) apiAddTrackToPlaylist(w http.ResponseWriter, r *http.Request) {
 
 	pl, _, err := s.master.FindPlaylistByID(plID)
 	if err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(w, http.StatusNotFound, "playlist not found")
 		return
 	}
 
@@ -694,31 +972,41 @@ func (s *Server) apiAddTrackToPlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	lib := s.master.Library
 	var trackToAdd *playlist.Track
 
-	// Strategy 1: Find by track ID in existing playlists.
+	// Strategy 1: Find by track ID in the library.
 	if body.TrackID != nil {
-		for _, existingPl := range s.master.AllPlaylists() {
-			if t, _, err := existingPl.FindTrackByID(*body.TrackID); err == nil {
-				// Make a copy so the same track object can exist in multiple playlists.
-				copied := *t
-				trackToAdd = &copied
-				break
+		if lib != nil {
+			trackToAdd = lib.GetByID(*body.TrackID)
+		}
+		// Fallback: search playlists (for backward compat during migration).
+		if trackToAdd == nil {
+			for _, existingPl := range s.master.AllPlaylists() {
+				if t, _, err := existingPl.FindTrackByID(*body.TrackID); err == nil {
+					trackToAdd = t
+					break
+				}
 			}
 		}
 		if trackToAdd == nil {
-			s.writeError(w, http.StatusNotFound, fmt.Sprintf("track %d not found in any playlist", *body.TrackID))
+			s.writeError(w, http.StatusNotFound, fmt.Sprintf("track %d not found", *body.TrackID))
 			return
 		}
 	}
 
-	// Strategy 2: Find by checksum in existing playlists.
+	// Strategy 2: Find by checksum in the library.
 	if trackToAdd == nil && body.Checksum != nil {
-		for _, existingPl := range s.master.AllPlaylists() {
-			if t, _, err := existingPl.FindTrackByChecksum(*body.Checksum); err == nil {
-				copied := *t
-				trackToAdd = &copied
-				break
+		if lib != nil {
+			trackToAdd = lib.Get(*body.Checksum)
+		}
+		// Fallback: search playlists.
+		if trackToAdd == nil {
+			for _, existingPl := range s.master.AllPlaylists() {
+				if t, _, err := existingPl.FindTrackByChecksum(*body.Checksum); err == nil {
+					trackToAdd = t
+					break
+				}
 			}
 		}
 		if trackToAdd == nil {
@@ -727,12 +1015,25 @@ func (s *Server) apiAddTrackToPlaylist(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Strategy 3: Create from file path.
+	// Strategy 3: Create from file path — restricted to the configured music
+	// directory to prevent local file inclusion attacks.
 	if trackToAdd == nil && body.FilePath != nil {
+		if !s.isPathInsideMusicDir(*body.FilePath) {
+			s.writeError(w, http.StatusForbidden, "file path must be within the music directory")
+			return
+		}
 		t, err := playlist.NewTrackFromFile(*body.FilePath)
 		if err != nil {
-			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("failed to create track from file: %v", err))
+			slog.Warn("Failed to create track from file",
+				"path", *body.FilePath,
+				"error", err,
+			)
+			s.writeError(w, http.StatusBadRequest, "failed to create track from file")
 			return
+		}
+		// Register in the library so it gets a stable ID.
+		if lib != nil {
+			t = lib.AddOrUpdate(t)
 		}
 		trackToAdd = t
 	}
@@ -753,7 +1054,7 @@ func (s *Server) apiAddTrackToPlaylist(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":   "ok",
-		"track":    trackToAdd,
+		"track":    sanitiseTrack(trackToAdd),
 		"playlist": pl,
 	})
 }
@@ -795,6 +1096,8 @@ func (s *Server) apiRemoveTrackFromPlaylist(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) apiMoveTrackInPlaylist(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
 	idStr := r.PathValue("id")
 	plID, err := parseID(idStr)
 	if err != nil {
@@ -804,7 +1107,7 @@ func (s *Server) apiMoveTrackInPlaylist(w http.ResponseWriter, r *http.Request) 
 
 	pl, _, err := s.master.FindPlaylistByID(plID)
 	if err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(w, http.StatusNotFound, "playlist not found")
 		return
 	}
 
@@ -867,23 +1170,27 @@ func (s *Server) apiExportPlaylist(w http.ResponseWriter, r *http.Request) {
 
 	pl, _, err := s.master.FindPlaylistByID(id)
 	if err != nil {
-		s.writeError(w, http.StatusNotFound, err.Error())
+		s.writeError(w, http.StatusNotFound, "playlist not found")
 		return
 	}
 
 	data, err := playlist.ExportPlaylist(pl)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("Failed to export playlist", "id", id, "error", err)
+		s.writeError(w, http.StatusInternalServerError, "failed to export playlist")
 		return
 	}
 
-	// Sanitize name for filename.
-	safeName := strings.ReplaceAll(pl.Name, " ", "_")
-	safeName = strings.ReplaceAll(safeName, "/", "_")
+	// Sanitize name for Content-Disposition to prevent header injection.
+	// Strip everything except alphanumeric, underscore, hyphen, and dot.
+	safeName := safeFilenameRe.ReplaceAllString(pl.Name, "_")
+	if safeName == "" {
+		safeName = fmt.Sprintf("playlist_%d", id)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition",
-		fmt.Sprintf("attachment; filename=\"%s.json\"", safeName))
+		fmt.Sprintf(`attachment; filename="%s.json"`, safeName))
 	w.WriteHeader(http.StatusOK)
 	w.Write(data)
 }
@@ -894,13 +1201,19 @@ func (s *Server) apiImportPlaylist(w http.ResponseWriter, r *http.Request) {
 
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "failed to read request body")
+		s.writeError(w, http.StatusBadRequest, "request body too large or unreadable")
 		return
 	}
 
-	pl, err := playlist.ImportPlaylistFromBytes(data)
+	var pl *playlist.Playlist
+	if s.master.Library != nil {
+		pl, err = playlist.ImportPlaylistIntoLibrary(data, s.master.Library)
+	} else {
+		pl, err = playlist.ImportPlaylistFromBytes(data)
+	}
 	if err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
+		slog.Warn("Failed to import playlist", "error", err)
+		s.writeError(w, http.StatusBadRequest, "invalid playlist data")
 		return
 	}
 
@@ -960,6 +1273,8 @@ func (s *Server) apiGetMasterPlaylist(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiAssignPlaylistToTag(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
 	tagStr := r.PathValue("tag")
 	if !playlist.IsValidTimeTag(tagStr) {
 		s.writeError(w, http.StatusBadRequest,
@@ -1040,22 +1355,23 @@ func (s *Server) apiRemovePlaylistFromTag(w http.ResponseWriter, r *http.Request
 // ---------------------------------------------------------------------------
 
 func (s *Server) apiReconcile(w http.ResponseWriter, r *http.Request) {
-	slog.Info("Reconcile requested")
+	slog.Info("Reconcile requested", "remote", r.RemoteAddr)
 
 	orphaned, removedCount, err := playlist.ReconcileTracks(s.config.MusicDir, s.master)
 	if err != nil {
 		slog.Error("Reconciliation failed", "error", err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeError(w, http.StatusInternalServerError, "reconciliation failed")
 		return
 	}
 
 	s.saveState()
 
+	sanitisedOrphaned := sanitiseTracks(orphaned)
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":         "ok",
 		"removed_count":  removedCount,
-		"orphaned_count": len(orphaned),
-		"orphaned":       orphaned,
+		"orphaned_count": len(sanitisedOrphaned),
+		"orphaned":       sanitisedOrphaned,
 		"total_tracks":   s.master.TotalTracks(),
 	})
 }
@@ -1065,12 +1381,122 @@ func (s *Server) apiReconcile(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (s *Server) apiSchedulerStatus(w http.ResponseWriter, r *http.Request) {
+	loc := s.master.Location()
+	tz := s.master.Timezone()
+	if tz == "" {
+		tz = "UTC"
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":         "ok",
+		"running":        s.scheduler.Running(),
+		"last_tag":       s.scheduler.LastTag(),
+		"time_tags":      playlist.ValidTimeTags,
+		"current_tag":    playlist.CurrentTimeTagIn(loc),
+		"summary":        s.master.Summary(),
+		"library_tracks": s.master.LibraryTrackCount(),
+		"timezone":       tz,
+		"server_time":    time.Now().In(loc).Format(time.RFC3339),
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Timezone
+// ---------------------------------------------------------------------------
+
+func (s *Server) apiGetTimezone(w http.ResponseWriter, r *http.Request) {
+	loc := s.master.Location()
+	tz := s.master.Timezone()
+	if tz == "" {
+		tz = "UTC"
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"timezone":    tz,
+		"server_time": time.Now().In(loc).Format(time.RFC3339),
+	})
+}
+
+func (s *Server) apiSetTimezone(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Timezone string `json:"timezone"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxBodySize)).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := s.master.SetTimezone(body.Timezone); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Force the scheduler to re-evaluate with the new timezone.
+	s.scheduler.ForceCheck()
+
+	// Persist the change.
+	s.saveState()
+
+	loc := s.master.Location()
+	tz := s.master.Timezone()
+	if tz == "" {
+		tz = "UTC"
+	}
+
 	s.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":      "ok",
-		"running":     s.scheduler.Running(),
-		"last_tag":    s.scheduler.LastTag(),
-		"time_tags":   playlist.ValidTimeTags,
-		"current_tag": playlist.CurrentTimeTag(),
-		"summary":     s.master.Summary(),
+		"timezone":    tz,
+		"server_time": time.Now().In(loc).Format(time.RFC3339),
+		"active_tag":  s.master.ActiveTag(),
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Security helpers
+// ---------------------------------------------------------------------------
+
+// isPathInsideMusicDir verifies that the given file path resolves to a
+// location within the configured music directory. This prevents local file
+// inclusion (LFI) attacks through the filePath parameter in the API.
+func (s *Server) isPathInsideMusicDir(filePath string) bool {
+	absMusicDir, err := filepath.Abs(s.config.MusicDir)
+	if err != nil {
+		return false
+	}
+
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return false
+	}
+
+	// Ensure the resolved path starts with the music directory.
+	return strings.HasPrefix(absPath, absMusicDir+string(filepath.Separator)) || absPath == absMusicDir
+}
+
+// sanitiseTrack returns a map representation of a track with the absolute
+// file-system path replaced by just the filename. This prevents leaking
+// server directory structure to API consumers.
+func sanitiseTrack(t *playlist.Track) map[string]interface{} {
+	return map[string]interface{}{
+		"id":       t.ID,
+		"title":    t.Title,
+		"artist":   t.Artist,
+		"album":    t.Album,
+		"genre":    t.Genre,
+		"year":     t.Year,
+		"trackNum": t.TrackNum,
+		"duration": t.Duration,
+		"filePath": filepath.Base(t.FilePath),
+		"format":   t.Format,
+		"checksum": t.Checksum,
+	}
+}
+
+// sanitiseTracks applies sanitiseTrack to a slice of tracks.
+func sanitiseTracks(tracks []*playlist.Track) []map[string]interface{} {
+	result := make([]map[string]interface{}, 0, len(tracks))
+	for _, t := range tracks {
+		result = append(result, sanitiseTrack(t))
+	}
+	return result
 }

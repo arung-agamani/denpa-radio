@@ -8,24 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 
 	"github.com/dhowden/tag"
 )
-
-// lastTrackID is a global counter for generating unique track IDs.
-var lastTrackID atomic.Int64
-
-// nextTrackID returns the next unique track ID.
-func nextTrackID() int64 {
-	return lastTrackID.Add(1)
-}
-
-// SetLastTrackID sets the global track ID counter. This is used when loading
-// persisted playlists so that newly created tracks don't collide with existing IDs.
-func SetLastTrackID(id int64) {
-	lastTrackID.Store(id)
-}
 
 // Track represents a single audio file with its metadata.
 type Track struct {
@@ -58,8 +43,9 @@ func IsSupportedFormat(ext string) bool {
 }
 
 // NewTrackFromFile creates a Track by reading metadata and computing a checksum
-// for the audio file at the given path. Returns an error if the file cannot be
-// read or hashed.
+// for the audio file at the given path. The returned track has ID 0; the caller
+// (typically TrackLibrary.Add) is responsible for assigning a stable ID.
+// Returns an error if the file cannot be read or hashed.
 func NewTrackFromFile(path string) (*Track, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -77,7 +63,7 @@ func NewTrackFromFile(path string) (*Track, error) {
 	}
 
 	track := &Track{
-		ID:       nextTrackID(),
+		ID:       0, // ID is assigned by the TrackLibrary
 		Title:    nameWithoutExt,
 		FilePath: absPath,
 		Format:   strings.TrimPrefix(ext, "."),

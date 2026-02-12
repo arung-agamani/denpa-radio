@@ -3,6 +3,7 @@ package playlist
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -17,21 +18,48 @@ type MasterPlaylist struct {
 	Evening   []*Playlist `json:"evening"`
 	Night     []*Playlist `json:"night"`
 
+	// Library is the single source of truth for all track data. Every track
+	// referenced by any playlist must exist in this library.
+	Library *TrackLibrary `json:"-"`
+
 	// activeTag is the tag currently being used for playback.
 	activeTag TimeTag
 	// activePlaylistIndex tracks which playlist within the active tag's slice
 	// is currently being played.
 	activePlaylistIndex int
+
+	// location is the IANA timezone used for time-tag resolution.
+	// When nil, time.UTC is used.
+	location *time.Location
+	// timezoneName stores the IANA name so it can be persisted and returned
+	// via the API (e.g. "Asia/Tokyo", "America/New_York").
+	timezoneName string
 }
 
 // NewMasterPlaylist creates a new MasterPlaylist with empty slices for each
-// time tag.
+// time tag and a fresh TrackLibrary.
 func NewMasterPlaylist() *MasterPlaylist {
 	return &MasterPlaylist{
 		Morning:   make([]*Playlist, 0),
 		Afternoon: make([]*Playlist, 0),
 		Evening:   make([]*Playlist, 0),
 		Night:     make([]*Playlist, 0),
+		Library:   NewTrackLibrary(),
+	}
+}
+
+// NewMasterPlaylistWithLibrary creates a new MasterPlaylist using an existing
+// TrackLibrary instance.
+func NewMasterPlaylistWithLibrary(lib *TrackLibrary) *MasterPlaylist {
+	if lib == nil {
+		lib = NewTrackLibrary()
+	}
+	return &MasterPlaylist{
+		Morning:   make([]*Playlist, 0),
+		Afternoon: make([]*Playlist, 0),
+		Evening:   make([]*Playlist, 0),
+		Night:     make([]*Playlist, 0),
+		Library:   lib,
 	}
 }
 
@@ -75,7 +103,8 @@ func (mp *MasterPlaylist) setPlaylistsUnsafe(tag TimeTag, pls []*Playlist) {
 }
 
 // AssignPlaylist adds a playlist to the specified time tag. If a playlist with
-// the same ID already exists under that tag it is replaced.
+// the same ID already exists under that tag it is replaced. The playlist's
+// library reference is set to this master playlist's library.
 func (mp *MasterPlaylist) AssignPlaylist(tag TimeTag, pl *Playlist) error {
 	if !IsValidTimeTag(string(tag)) {
 		return fmt.Errorf("invalid time tag: %s", tag)
@@ -86,6 +115,11 @@ func (mp *MasterPlaylist) AssignPlaylist(tag TimeTag, pl *Playlist) error {
 
 	// Update the playlist's own tag to match.
 	pl.Tag = tag
+
+	// Associate the playlist with this master playlist's library.
+	if mp.Library != nil {
+		pl.SetLibrary(mp.Library)
+	}
 
 	existing := mp.getPlaylistsUnsafe(tag)
 	for i, p := range existing {
@@ -177,11 +211,18 @@ func (mp *MasterPlaylist) AllTracks() []*Track {
 }
 
 // AllTracksDeduped returns unique tracks across all playlists, deduped by
-// checksum.
+// checksum. If a TrackLibrary is available, it returns all library tracks
+// instead (which is the authoritative set).
 func (mp *MasterPlaylist) AllTracksDeduped() []*Track {
 	mp.mu.RLock()
 	defer mp.mu.RUnlock()
 
+	// If we have a library, it is the canonical source of all known tracks.
+	if mp.Library != nil {
+		return mp.Library.List()
+	}
+
+	// Fallback for when no library is set (shouldn't happen in normal operation).
 	seen := make(map[string]bool)
 	var tracks []*Track
 	for _, tag := range ValidTimeTags {
@@ -197,6 +238,22 @@ func (mp *MasterPlaylist) AllTracksDeduped() []*Track {
 		}
 	}
 	return tracks
+}
+
+// RemoveTrackFromAll removes a track (by checksum) from ALL playlists in
+// the master playlist. This is used when a track is deleted from the library.
+// Returns the total number of occurrences removed.
+func (mp *MasterPlaylist) RemoveTrackFromAll(checksum string) int {
+	mp.mu.RLock()
+	defer mp.mu.RUnlock()
+
+	total := 0
+	for _, tag := range ValidTimeTags {
+		for _, pl := range mp.getPlaylistsUnsafe(tag) {
+			total += pl.RemoveTracksByChecksum(checksum)
+		}
+	}
+	return total
 }
 
 // TimeTagForHour returns the appropriate TimeTag for the given hour (0-23).
@@ -218,19 +275,29 @@ func TimeTagForHour(hour int) TimeTag {
 	}
 }
 
-// CurrentTimeTag returns the TimeTag for the current local time.
+// CurrentTimeTag returns the TimeTag for the current time in UTC.
+// Prefer CurrentTimeTagIn when a specific timezone is desired.
 func CurrentTimeTag() TimeTag {
-	return TimeTagForHour(time.Now().Hour())
+	return TimeTagForHour(time.Now().UTC().Hour())
+}
+
+// CurrentTimeTagIn returns the TimeTag for the current time in the given
+// location. If loc is nil, UTC is used.
+func CurrentTimeTagIn(loc *time.Location) TimeTag {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return TimeTagForHour(time.Now().In(loc).Hour())
 }
 
 // ResolveActiveTag determines which time tag should be active based on the
-// current time. It returns the tag and whether a change from the previous
-// active tag occurred.
+// current time and the master playlist's configured timezone. It returns the
+// tag and whether a change from the previous active tag occurred.
 func (mp *MasterPlaylist) ResolveActiveTag() (TimeTag, bool) {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
 
-	tag := CurrentTimeTag()
+	tag := CurrentTimeTagIn(mp.location)
 	changed := tag != mp.activeTag
 	if changed {
 		mp.activeTag = tag
@@ -246,6 +313,49 @@ func (mp *MasterPlaylist) SetActiveTag(tag TimeTag) {
 	defer mp.mu.Unlock()
 	mp.activeTag = tag
 	mp.activePlaylistIndex = 0
+}
+
+// SetTimezone sets the IANA timezone used for time-tag resolution.
+// An empty string resets to UTC. Returns an error if the name is invalid.
+func (mp *MasterPlaylist) SetTimezone(name string) error {
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+
+	if name == "" {
+		mp.location = time.UTC
+		mp.timezoneName = ""
+		slog.Info("Timezone set to UTC")
+		return nil
+	}
+
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return fmt.Errorf("invalid timezone %q: %w", name, err)
+	}
+
+	mp.location = loc
+	mp.timezoneName = name
+	slog.Info("Timezone updated", "timezone", name)
+	return nil
+}
+
+// Timezone returns the IANA timezone name currently configured.
+// An empty string means UTC.
+func (mp *MasterPlaylist) Timezone() string {
+	mp.mu.RLock()
+	defer mp.mu.RUnlock()
+	return mp.timezoneName
+}
+
+// Location returns the *time.Location currently configured.
+// Returns time.UTC if no timezone has been set.
+func (mp *MasterPlaylist) Location() *time.Location {
+	mp.mu.RLock()
+	defer mp.mu.RUnlock()
+	if mp.location == nil {
+		return time.UTC
+	}
+	return mp.location
 }
 
 // ActiveTag returns the currently active time tag.
@@ -385,6 +495,13 @@ func (mp *MasterPlaylist) RemoveDeletedTracks() int {
 			pl.mu.Unlock()
 		}
 	}
+
+	// Also remove stale tracks from the library itself.
+	if mp.Library != nil {
+		stale := mp.Library.RemoveStale()
+		_ = stale // already counted above via playlist removal
+	}
+
 	return removed
 }
 
@@ -414,6 +531,15 @@ func (mp *MasterPlaylist) TotalTracks() int {
 		}
 	}
 	return total
+}
+
+// LibraryTrackCount returns the number of unique tracks in the library.
+// Returns 0 if no library is set.
+func (mp *MasterPlaylist) LibraryTrackCount() int {
+	if mp.Library == nil {
+		return 0
+	}
+	return mp.Library.Count()
 }
 
 // IsEmpty returns true if there are no playlists assigned to any tag.

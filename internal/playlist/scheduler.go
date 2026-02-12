@@ -47,7 +47,7 @@ func NewScheduler(master *MasterPlaylist, callback SchedulerCallback, interval t
 		master:   master,
 		callback: callback,
 		interval: interval,
-		lastTag:  CurrentTimeTag(),
+		lastTag:  CurrentTimeTagIn(master.Location()),
 	}
 }
 

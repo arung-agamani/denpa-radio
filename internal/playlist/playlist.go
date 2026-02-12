@@ -53,6 +53,8 @@ func SetLastPlaylistID(id int64) {
 }
 
 // Playlist represents an ordered queue of tracks with a time-of-day tag.
+// Tracks are pointers into a shared TrackLibrary so that metadata edits in the
+// library are automatically visible everywhere.
 type Playlist struct {
 	mu                   sync.RWMutex
 	ID                   int64    `json:"id"`
@@ -61,6 +63,75 @@ type Playlist struct {
 	Tracks               []*Track `json:"tracks"`
 	CurrentTrackChecksum string   `json:"currentTrackChecksum,omitempty"`
 	currentIndex         int
+	library              *TrackLibrary // optional reference; when set, tracks are validated against it
+}
+
+// SetLibrary associates this playlist with a TrackLibrary. When set, AddTrack
+// and AddTrackByChecksum will validate that the track exists in the library and
+// store a pointer to the canonical library entry.
+func (p *Playlist) SetLibrary(lib *TrackLibrary) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.library = lib
+}
+
+// Library returns the TrackLibrary associated with this playlist, or nil.
+func (p *Playlist) Library() *TrackLibrary {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.library
+}
+
+// TrackChecksums returns the ordered list of track checksums. This is used
+// when persisting playlists so that only references (not full track data) are
+// stored on disk.
+func (p *Playlist) TrackChecksums() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	cs := make([]string, len(p.Tracks))
+	for i, t := range p.Tracks {
+		cs[i] = t.Checksum
+	}
+	return cs
+}
+
+// ResolveFromLibrary replaces the Tracks slice with canonical pointers from
+// the given library, matched by checksum. Tracks whose checksums are not found
+// in the library are silently dropped.
+func (p *Playlist) ResolveFromLibrary(lib *TrackLibrary) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.library = lib
+
+	resolved := make([]*Track, 0, len(p.Tracks))
+	for _, t := range p.Tracks {
+		if canonical := lib.Get(t.Checksum); canonical != nil {
+			resolved = append(resolved, canonical)
+		}
+	}
+	p.Tracks = resolved
+
+	// Re-locate the current track by checksum.
+	if p.CurrentTrackChecksum != "" {
+		found := false
+		for i, t := range p.Tracks {
+			if t.Checksum == p.CurrentTrackChecksum {
+				p.currentIndex = i
+				found = true
+				break
+			}
+		}
+		if !found {
+			p.currentIndex = 0
+			p.CurrentTrackChecksum = ""
+		}
+	}
+
+	if p.currentIndex >= len(p.Tracks) {
+		p.currentIndex = 0
+	}
 }
 
 // NewPlaylist creates a new empty Playlist with the given name and tag.
@@ -156,11 +227,40 @@ func (p *Playlist) FindTrackByChecksum(checksum string) (*Track, int, error) {
 	return nil, -1, errors.New("track not found")
 }
 
-// AddTrack appends a track to the end of the playlist.
+// AddTrack appends a track to the end of the playlist. If the playlist has an
+// associated library, the track must exist in the library; the canonical library
+// pointer is used instead of the provided pointer to keep references consistent.
 func (p *Playlist) AddTrack(track *Track) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if p.library != nil && track != nil {
+		if canonical := p.library.Get(track.Checksum); canonical != nil {
+			track = canonical
+		}
+	}
+
 	p.Tracks = append(p.Tracks, track)
+}
+
+// AddTrackByChecksum looks up the track in the associated library and appends
+// it to the playlist. Returns an error if the library is not set or the
+// checksum is not found.
+func (p *Playlist) AddTrackByChecksum(checksum string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.library == nil {
+		return errors.New("playlist has no associated library")
+	}
+
+	t := p.library.Get(checksum)
+	if t == nil {
+		return errors.New("track not found in library")
+	}
+
+	p.Tracks = append(p.Tracks, t)
+	return nil
 }
 
 // AddTrackAt inserts a track at the specified index. If the index is out of
@@ -168,6 +268,12 @@ func (p *Playlist) AddTrack(track *Track) {
 func (p *Playlist) AddTrackAt(track *Track, index int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	if p.library != nil && track != nil {
+		if canonical := p.library.Get(track.Checksum); canonical != nil {
+			track = canonical
+		}
+	}
 
 	if index < 0 || index >= len(p.Tracks) {
 		p.Tracks = append(p.Tracks, track)
@@ -188,7 +294,16 @@ func (p *Playlist) AddTrackAt(track *Track, index int) {
 func (p *Playlist) AddTracks(tracks []*Track) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.Tracks = append(p.Tracks, tracks...)
+
+	for _, track := range tracks {
+		t := track
+		if p.library != nil && t != nil {
+			if canonical := p.library.Get(t.Checksum); canonical != nil {
+				t = canonical
+			}
+		}
+		p.Tracks = append(p.Tracks, t)
+	}
 }
 
 // RemoveTrack removes the track at the given index and returns it. Returns an
@@ -265,6 +380,47 @@ func (p *Playlist) RemoveTrackByChecksum(checksum string) (*Track, error) {
 		}
 	}
 	return nil, errors.New("track not found")
+}
+
+// RemoveTracksByChecksum removes ALL occurrences of the given checksum from
+// the playlist. This is used when a track is deleted from the library.
+// Returns the number of occurrences removed.
+func (p *Playlist) RemoveTracksByChecksum(checksum string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	alive := make([]*Track, 0, len(p.Tracks))
+	removed := 0
+	for _, t := range p.Tracks {
+		if t.Checksum == checksum {
+			removed++
+		} else {
+			alive = append(alive, t)
+		}
+	}
+	p.Tracks = alive
+
+	if len(p.Tracks) == 0 {
+		p.currentIndex = 0
+		p.CurrentTrackChecksum = ""
+	} else if p.currentIndex >= len(p.Tracks) {
+		p.currentIndex = 0
+	}
+
+	// Re-locate current track.
+	if p.CurrentTrackChecksum == checksum {
+		p.CurrentTrackChecksum = ""
+		p.currentIndex = 0
+	} else if p.CurrentTrackChecksum != "" {
+		for i, t := range p.Tracks {
+			if t.Checksum == p.CurrentTrackChecksum {
+				p.currentIndex = i
+				break
+			}
+		}
+	}
+
+	return removed
 }
 
 // MoveTrack moves a track from the source index to the destination index.
@@ -419,11 +575,11 @@ func (p *Playlist) Clone(newName string) *Playlist {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
+	// When cloning, we keep the same track pointers (they point into the
+	// library, which is the single source of truth). We do NOT deep-copy
+	// the Track structs because we want edits to propagate.
 	tracks := make([]*Track, len(p.Tracks))
-	for i, t := range p.Tracks {
-		copied := *t
-		tracks[i] = &copied
-	}
+	copy(tracks, p.Tracks)
 
 	return &Playlist{
 		ID:                   nextPlaylistID(),
@@ -432,6 +588,7 @@ func (p *Playlist) Clone(newName string) *Playlist {
 		Tracks:               tracks,
 		CurrentTrackChecksum: p.CurrentTrackChecksum,
 		currentIndex:         p.currentIndex,
+		library:              p.library,
 	}
 }
 

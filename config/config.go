@@ -18,6 +18,7 @@ type Config struct {
 	DJUsername   string
 	DJPassword   string
 	JWTSecret    string
+	Timezone     string
 }
 
 func Load() *Config {
@@ -34,6 +35,7 @@ func Load() *Config {
 		DJUsername:   getEnv("DJ_USERNAME", "dj"),
 		DJPassword:   getEnv("DJ_PASSWORD", "denpa"),
 		JWTSecret:    getEnv("JWT_SECRET", "change-me-in-production-please"),
+		Timezone:     getEnv("TIMEZONE", ""),
 	}
 }
 
