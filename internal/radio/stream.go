@@ -31,6 +31,9 @@ type Broadcaster struct {
 	clients      map[uint64]*clientSub
 	nextID       uint64
 	currentTrack atomic.Value // stores string (file path)
+
+	// skipCh is signalled by Skip() to abort the current track and advance.
+	skipCh chan struct{}
 }
 
 func NewBroadcaster(legacyPlaylist *Playlist, encoder *ffmpeg.Encoder) *Broadcaster {
@@ -38,6 +41,7 @@ func NewBroadcaster(legacyPlaylist *Playlist, encoder *ffmpeg.Encoder) *Broadcas
 		legacyPlaylist: legacyPlaylist,
 		encoder:        encoder,
 		clients:        make(map[uint64]*clientSub),
+		skipCh:         make(chan struct{}, 1),
 	}
 	b.currentTrack.Store("")
 	return b
@@ -105,17 +109,49 @@ func (b *Broadcaster) Start(ctx context.Context) {
 		b.currentTrack.Store(track)
 		slog.Info("Broadcasting track", "track", trackName)
 
+		// Create a per-track context so we can abort just this track on skip.
+		trackCtx, trackCancel := context.WithCancel(ctx)
+
+		// Goroutine that listens for a skip signal and cancels the track context.
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			select {
+			case <-b.skipCh:
+				trackCancel()
+			case <-trackCtx.Done():
+			}
+		}()
+
 		writer := &broadcastWriter{broadcaster: b}
-		err := b.encoder.Stream(ctx, track, writer)
+		err := b.encoder.Stream(trackCtx, track, writer)
+		trackCancel()
+		<-done // wait for the skip-watcher goroutine to exit
+
 		if err != nil {
 			if ctx.Err() != nil {
+				// Main context cancelled – shut down.
 				return
+			}
+			if trackCtx.Err() != nil {
+				// Track was skipped – advance to the next one immediately.
+				continue
 			}
 			slog.Error("Broadcast encoding error", "error", err, "track", trackName)
 			// Small pause before trying the next track so we don't spin on a
 			// persistently broken file.
 			time.Sleep(500 * time.Millisecond)
 		}
+	}
+}
+
+// Skip aborts the currently-streaming track and immediately advances to the
+// next one. It is safe to call from any goroutine.
+func (b *Broadcaster) Skip() {
+	select {
+	case b.skipCh <- struct{}{}:
+	default:
+		// A skip is already pending; the current track will stop shortly.
 	}
 }
 

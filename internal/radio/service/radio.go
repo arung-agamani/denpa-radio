@@ -15,6 +15,9 @@ import (
 type Broadcaster interface {
 	CurrentTrack() string
 	ActiveClients() int
+	// Skip aborts the currently-streaming track and immediately advances to
+	// the next one.
+	Skip()
 }
 
 // StatusSnapshot holds all fields for the GET /api/status response.
@@ -197,6 +200,28 @@ func (s *RadioService) SetTimezone(tz string) (resolvedTZ, serverTime string, ac
 // LegacyAllTracks returns all deduplicated tracks for the legacy /playlist endpoint.
 func (s *RadioService) LegacyAllTracks() []*playlist.Track {
 	return s.master.AllTracksDeduped()
+}
+
+// GetQueue returns up to n upcoming tracks from the active playlist, starting
+// with the currently-playing track. Pass n <= 0 to get all tracks.
+func (s *RadioService) GetQueue(n int) []*playlist.Track {
+	tracks, _ := s.master.PeekQueue(n)
+	return tracks
+}
+
+// SkipNext immediately skips to the next track by aborting the current one.
+func (s *RadioService) SkipNext() {
+	s.broadcaster.Skip()
+}
+
+// SkipPrev seeks the active playlist cursor back one position, then aborts the
+// current track so playback restarts from the previous track.
+func (s *RadioService) SkipPrev() error {
+	if err := s.master.SeekPrev(); err != nil {
+		return err
+	}
+	s.broadcaster.Skip()
+	return nil
 }
 
 // Reconcile scans the music directory, removes stale tracks, auto-adds

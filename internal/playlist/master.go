@@ -518,6 +518,108 @@ func (mp *MasterPlaylist) Summary() map[TimeTag]int {
 	}
 }
 
+// activePlaylistUnsafe returns the active playlist without locking.
+// The caller must hold mp.mu in at least read mode.
+func (mp *MasterPlaylist) activePlaylistUnsafe() *Playlist {
+	if pls := mp.getPlaylistsUnsafe(mp.activeTag); len(pls) > 0 {
+		idx := mp.activePlaylistIndex
+		if idx >= len(pls) {
+			idx = 0
+		}
+		return pls[idx]
+	}
+	for _, tag := range ValidTimeTags {
+		if pls := mp.getPlaylistsUnsafe(tag); len(pls) > 0 {
+			return pls[0]
+		}
+	}
+	return nil
+}
+
+// PeekQueue returns up to n upcoming tracks from the active playlist, starting
+// from the track that is currently playing (identified by CurrentTrackChecksum).
+// If nothing has played yet, it starts from the next-to-play position.
+// Pass n <= 0 to return all tracks in the playlist.
+func (mp *MasterPlaylist) PeekQueue(n int) ([]*Track, *Playlist) {
+	mp.mu.RLock()
+	pl := mp.activePlaylistUnsafe()
+	mp.mu.RUnlock()
+
+	if pl == nil {
+		return nil, nil
+	}
+
+	pl.mu.RLock()
+	defer pl.mu.RUnlock()
+
+	total := len(pl.Tracks)
+	if total == 0 {
+		return nil, pl
+	}
+
+	if n <= 0 || n > total {
+		n = total
+	}
+
+	// Default start is the next-to-play position.
+	startIdx := pl.currentIndex
+
+	// If a track is currently playing, include it as the first in the queue.
+	if pl.CurrentTrackChecksum != "" {
+		for i, t := range pl.Tracks {
+			if t.Checksum == pl.CurrentTrackChecksum {
+				startIdx = i
+				break
+			}
+		}
+	}
+
+	result := make([]*Track, 0, n)
+	for i := 0; i < n; i++ {
+		result = append(result, pl.Tracks[(startIdx+i)%total])
+	}
+	return result, pl
+}
+
+// SeekPrev moves the active playlist's cursor back one position so that after
+// the current track is cancelled and Next() is called again, it will return the
+// track that preceded the one currently playing.
+func (mp *MasterPlaylist) SeekPrev() error {
+	mp.mu.RLock()
+	pl := mp.activePlaylistUnsafe()
+	mp.mu.RUnlock()
+
+	if pl == nil {
+		return errors.New("no active playlist")
+	}
+
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+
+	n := len(pl.Tracks)
+	if n == 0 {
+		return errors.New("active playlist is empty")
+	}
+
+	if pl.CurrentTrackChecksum == "" {
+		// Nothing played yet; jump to the last track.
+		pl.currentIndex = n - 1
+		return nil
+	}
+
+	for i, t := range pl.Tracks {
+		if t.Checksum == pl.CurrentTrackChecksum {
+			// Set cursor to (i-1) so Next() returns the track before current.
+			pl.currentIndex = (i - 1 + n) % n
+			return nil
+		}
+	}
+
+	// Currently-playing track no longer in playlist; step back one from cursor.
+	pl.currentIndex = (pl.currentIndex - 2 + n*2) % n
+	return nil
+}
+
 // TotalTracks returns the total number of tracks across all playlists (may
 // include duplicates).
 func (mp *MasterPlaylist) TotalTracks() int {

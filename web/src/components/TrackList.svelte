@@ -71,6 +71,9 @@
     <table class="w-full text-left">
       <thead>
         <tr class="border-b border-gray-200 dark:border-gray-700 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+          {#if editable}
+            <th class="px-3 {compact ? 'py-2' : 'py-3'} w-28 text-center">Actions</th>
+          {/if}
           {#if showIndex}
             <th class="px-3 {compact ? 'py-2' : 'py-3'} w-12 text-center">#</th>
           {/if}
@@ -81,9 +84,6 @@
             <th class="px-3 {compact ? 'py-2' : 'py-3'} hidden lg:table-cell w-20 text-center">Format</th>
           {/if}
           <th class="px-3 {compact ? 'py-2' : 'py-3'} hidden lg:table-cell w-20 text-right">Duration</th>
-          {#if editable}
-            <th class="px-3 {compact ? 'py-2' : 'py-3'} w-28 text-center">Actions</th>
-          {/if}
         </tr>
       </thead>
       <tbody>
@@ -93,13 +93,55 @@
             class="border-b border-gray-100 dark:border-gray-800 transition-colors
               {isHighlighted
                 ? 'bg-primary-50 dark:bg-primary-900/20 border-l-2 border-l-primary-500'
-                : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'}
-              {compact ? '' : 'group'}"
+                : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'}"
             on:click={() => handleSelect(track, index)}
             role="button"
             tabindex="0"
             on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelect(track, index); } }}
           >
+            {#if editable}
+              <td class="px-3 {compact ? 'py-1.5' : 'py-3'} text-center">
+                <div class="flex items-center justify-center gap-1">
+                  <!-- Move up -->
+                  <button
+                    type="button"
+                    class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="Move up"
+                    disabled={index === 0}
+                    on:click|stopPropagation={() => handleMoveUp(track, index)}
+                  >
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+                    </svg>
+                  </button>
+
+                  <!-- Move down -->
+                  <button
+                    type="button"
+                    class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="Move down"
+                    disabled={index === tracks.length - 1}
+                    on:click|stopPropagation={() => handleMoveDown(track, index)}
+                  >
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                    </svg>
+                  </button>
+
+                  <!-- Remove -->
+                  <button
+                    type="button"
+                    class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+                    title="Remove from playlist"
+                    on:click|stopPropagation={() => handleRemove(track, index)}
+                  >
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </td>
+            {/if}
             {#if showIndex}
               <td class="px-3 {compact ? 'py-1.5' : 'py-3'} text-center">
                 <span class="text-xs font-mono text-gray-400 dark:text-gray-500 {isHighlighted ? 'text-primary-500 dark:text-primary-400 font-semibold' : ''}">
@@ -165,50 +207,6 @@
                 {formatDuration(track.duration)}
               </span>
             </td>
-
-            {#if editable}
-              <td class="px-3 {compact ? 'py-1.5' : 'py-3'} text-center">
-                <div class="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                  <!-- Move up -->
-                  <button
-                    type="button"
-                    class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                    title="Move up"
-                    disabled={index === 0}
-                    on:click|stopPropagation={() => handleMoveUp(track, index)}
-                  >
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
-                    </svg>
-                  </button>
-
-                  <!-- Move down -->
-                  <button
-                    type="button"
-                    class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                    title="Move down"
-                    disabled={index === tracks.length - 1}
-                    on:click|stopPropagation={() => handleMoveDown(track, index)}
-                  >
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                    </svg>
-                  </button>
-
-                  <!-- Remove -->
-                  <button
-                    type="button"
-                    class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
-                    title="Remove from playlist"
-                    on:click|stopPropagation={() => handleRemove(track, index)}
-                  >
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              </td>
-            {/if}
           </tr>
         {/each}
       </tbody>

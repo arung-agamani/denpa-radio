@@ -251,6 +251,26 @@ export async function removePlaylistFromTag(tag, playlistId) {
 }
 
 // ---------------------------------------------------------------------------
+// Queue
+// ---------------------------------------------------------------------------
+
+export async function getQueue() {
+    return request("GET", "/api/queue", null, { noAuth: true });
+}
+
+// ---------------------------------------------------------------------------
+// Skip controls (protected)
+// ---------------------------------------------------------------------------
+
+export async function skipNext() {
+    return request("POST", "/api/skip/next");
+}
+
+export async function skipPrev() {
+    return request("POST", "/api/skip/prev");
+}
+
+// ---------------------------------------------------------------------------
 // Scheduler
 // ---------------------------------------------------------------------------
 

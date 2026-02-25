@@ -535,6 +535,20 @@ func (p *Playlist) ContainsTrack(checksum string) bool {
 	return false
 }
 
+// SeekTo moves the playback cursor to the given index so that the next call to
+// Next() will return the track at that position. The index wraps around
+// modulo the playlist length. A no-op on an empty playlist.
+func (p *Playlist) SeekTo(index int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	n := len(p.Tracks)
+	if n == 0 {
+		return
+	}
+	p.currentIndex = ((index % n) + n) % n
+}
+
 // Clone returns a deep copy of the playlist (with a new ID).
 func (p *Playlist) Clone(newName string) *Playlist {
 	p.mu.RLock()

@@ -147,6 +147,30 @@ func (h *RadioHandlers) LegacyPlaylist(c *gin.Context) {
 	})
 }
 
+// GetQueue handles GET /api/queue  (public)
+func (h *RadioHandlers) GetQueue(c *gin.Context) {
+	tracks := h.svc.GetQueue(0)
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ok",
+		"tracks": sanitiseTracks(tracks),
+	})
+}
+
+// SkipNext handles POST /api/skip/next  (protected)
+func (h *RadioHandlers) SkipNext(c *gin.Context) {
+	h.svc.SkipNext()
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// SkipPrev handles POST /api/skip/prev  (protected)
+func (h *RadioHandlers) SkipPrev(c *gin.Context) {
+	if err := h.svc.SkipPrev(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
 // LegacyReload handles POST /playlist/reload  (protected, backwards compat)
 func (h *RadioHandlers) LegacyReload(c *gin.Context) {
 	slog.Info("Playlist reload requested (legacy)")

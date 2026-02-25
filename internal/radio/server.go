@@ -221,6 +221,7 @@ func (s *Server) registerRoutes(engine *gin.Engine, authInstance *auth.Auth) {
 		api.GET("/scheduler/status", s.radioH.SchedulerStatus)
 		api.GET("/timezone", s.radioH.GetTimezone)
 		api.GET("/master", s.masterH.Get)
+		api.GET("/queue", s.radioH.GetQueue)
 
 		// Literal sub-paths registered before :id to avoid routing conflicts.
 		api.GET("/tracks/search", s.trackH.Search)
@@ -264,6 +265,10 @@ func (s *Server) registerRoutes(engine *gin.Engine, authInstance *auth.Auth) {
 		// Reconcile & timezone
 		protected.POST("/reconcile", s.radioH.Reconcile)
 		protected.PUT("/timezone", s.radioH.SetTimezone)
+
+		// Skip controls
+		protected.POST("/skip/next", s.radioH.SkipNext)
+		protected.POST("/skip/prev", s.radioH.SkipPrev)
 
 		// Legacy protected reload
 		protected.POST("/playlist/reload", s.radioH.LegacyReload)
