@@ -3,6 +3,7 @@ package handler
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
 	"github.com/arung-agamani/denpa-radio/internal/radio/service"
@@ -192,7 +193,14 @@ func (h *TrackHandlers) Upload(c *gin.Context) {
 		"size_bytes", fileHeader.Size,
 	)
 
-	result, err := h.svc.Upload(fileHeader.Filename, f)
+	meta := service.UploadMeta{
+		Title:  strings.TrimSpace(c.PostForm("title")),
+		Artist: strings.TrimSpace(c.PostForm("artist")),
+		Album:  strings.TrimSpace(c.PostForm("album")),
+		Genre:  strings.TrimSpace(c.PostForm("genre")),
+	}
+
+	result, err := h.svc.Upload(fileHeader.Filename, f, meta)
 	if err != nil {
 		code := "UPLOAD_FAILED"
 		status := http.StatusInternalServerError

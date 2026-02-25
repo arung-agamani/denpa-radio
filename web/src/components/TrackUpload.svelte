@@ -16,7 +16,7 @@
     // State
     // --------------------------------------------------------------------------
 
-    /** @type {{ id: number, file: File, status: 'queued'|'uploading'|'done'|'error'|'duplicate', progress: number, track?: object, error?: string }[]} */
+    /** @type {Array<{id: number, file: File, status: 'queued'|'uploading'|'done'|'error'|'duplicate', progress: number, track?: object, error?: string, meta: {title:string,artist:string,album:string,genre:string}, expanded: boolean}>} */
     let queue = [];
     let idCounter = 0;
     let isDragging = false;
@@ -60,13 +60,22 @@
                         status: "error",
                         progress: 0,
                         error: `File exceeds 100 MB limit (${formatBytes(file.size)})`,
+                        meta: { title: "", artist: "", album: "", genre: "" },
+                        expanded: false,
                     },
                 ];
                 continue;
             }
             queue = [
                 ...queue,
-                { id: ++idCounter, file, status: "queued", progress: 0 },
+                {
+                    id: ++idCounter,
+                    file,
+                    status: "queued",
+                    progress: 0,
+                    meta: { title: "", artist: "", album: "", genre: "" },
+                    expanded: false,
+                },
             ];
         }
     }
@@ -82,6 +91,7 @@
             try {
                 const result = await uploadTrack(entry.file, {
                     onProgress: (pct) => setProgress(entry.id, pct),
+                    meta: entry.meta,
                 });
                 if (result.added) {
                     setStatus(entry.id, "done", { track: result.track });
@@ -107,6 +117,14 @@
 
     function removeEntry(id) {
         queue = queue.filter((e) => e.id !== id);
+    }
+
+    function toggleMeta(id) {
+        queue = queue.map((e) => e.id === id ? { ...e, expanded: !e.expanded } : e);
+    }
+
+    function updateMeta(id, field, value) {
+        queue = queue.map((e) => e.id === id ? { ...e, meta: { ...e.meta, [field]: value } } : e);
     }
 
     function clearCompleted() {
@@ -249,7 +267,9 @@
             <!-- Rows -->
             <ul class="divide-y divide-gray-100 dark:divide-gray-700/60">
                 {#each queue as entry (entry.id)}
-                    <li class="flex items-center gap-3 px-4 py-3 {rowBg[entry.status]} transition-colors">
+                    <li class="{rowBg[entry.status]} transition-colors">
+                        <!-- Main row -->
+                        <div class="flex items-center gap-3 px-4 py-3">
                         <!-- Status icon -->
                         <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center {statusIconCls[entry.status]}">
                             {#if entry.status === "queued"}
@@ -279,7 +299,11 @@
                         <!-- File info -->
                         <div class="flex-1 min-w-0">
                             <p class="text-sm font-medium text-gray-800 dark:text-gray-200 truncate" title={entry.file.name}>
-                                {entry.file.name}
+                                {#if entry.status === 'queued' && entry.meta.title.trim()}
+                                    {entry.meta.title.trim()}{entry.file.name.slice(entry.file.name.lastIndexOf('.'))}
+                                {:else}
+                                    {entry.file.name}
+                                {/if}
                             </p>
                             <div class="flex items-center gap-2 mt-0.5">
                                 <span class="text-xs text-gray-400 dark:text-gray-500">{formatBytes(entry.file.size)}</span>
@@ -309,18 +333,81 @@
                             {/if}
                         </div>
 
-                        <!-- Remove button (not while uploading) -->
+                        <!-- Actions: metadata toggle (queued only) + remove -->
                         {#if entry.status !== "uploading"}
-                            <button
-                                type="button"
-                                class="flex-shrink-0 text-gray-300 dark:text-gray-600 hover:text-red-400 dark:hover:text-red-400 transition-colors"
-                                title="Remove from queue"
-                                on:click|stopPropagation={() => removeEntry(entry.id)}
-                            >
-                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-                                </svg>
-                            </button>
+                            <div class="flex-shrink-0 flex items-center gap-1">
+                                {#if entry.status === "queued"}
+                                    <button
+                                        type="button"
+                                        class="p-1.5 rounded-lg transition-colors {entry.expanded ? 'text-primary-500 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/20' : 'text-gray-400 hover:text-primary-500 dark:hover:text-primary-400 hover:bg-gray-100 dark:hover:bg-gray-700'}"
+                                        title="{entry.expanded ? 'Hide' : 'Edit'} metadata"
+                                        on:click|stopPropagation={() => toggleMeta(entry.id)}
+                                    >
+                                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" />
+                                        </svg>
+                                    </button>
+                                {/if}
+                                <button
+                                    type="button"
+                                    class="p-1.5 rounded-lg text-gray-300 dark:text-gray-600 hover:text-red-400 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                                    title="Remove from queue"
+                                    on:click|stopPropagation={() => removeEntry(entry.id)}
+                                >
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </div>
+                        {/if}
+                        </div><!-- end main row -->
+
+                        <!-- Metadata form (queued + expanded) -->
+                        {#if entry.status === "queued" && entry.expanded}
+                            <div class="px-4 pb-3 pt-1 grid grid-cols-2 gap-2 border-t border-gray-100 dark:border-gray-700/60 mt-0">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                                        Title <span class="font-normal opacity-60">(becomes filename)</span>
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={entry.meta.title}
+                                        on:input={(e) => updateMeta(entry.id, 'title', e.currentTarget.value)}
+                                        placeholder="Auto-detected from file"
+                                        class="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Artist</label>
+                                    <input
+                                        type="text"
+                                        value={entry.meta.artist}
+                                        on:input={(e) => updateMeta(entry.id, 'artist', e.currentTarget.value)}
+                                        placeholder="Auto-detected from file"
+                                        class="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Album</label>
+                                    <input
+                                        type="text"
+                                        value={entry.meta.album}
+                                        on:input={(e) => updateMeta(entry.id, 'album', e.currentTarget.value)}
+                                        placeholder="Auto-detected from file"
+                                        class="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Genre</label>
+                                    <input
+                                        type="text"
+                                        value={entry.meta.genre}
+                                        on:input={(e) => updateMeta(entry.id, 'genre', e.currentTarget.value)}
+                                        placeholder="Auto-detected from file"
+                                        class="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                                    />
+                                </div>
+                            </div>
                         {/if}
                     </li>
                 {/each}

@@ -306,14 +306,21 @@ export async function reconcile() {
  * Upload one audio file to the server.
  *
  * @param {File} file - The File object to upload.
- * @param {{ onProgress?: (percent: number) => void }} [opts]
+ * @param {{ onProgress?: (percent: number) => void, meta?: { title?: string, artist?: string, album?: string, genre?: string } }} [opts]
  * @returns {Promise<{ status: string, added: boolean, track: object }>}
  */
-export function uploadTrack(file, { onProgress } = {}) {
+export function uploadTrack(file, { onProgress, meta } = {}) {
     return new Promise((resolve, reject) => {
         const token = getToken();
         const form = new FormData();
         form.append("file", file);
+
+        // Append any provided metadata fields so the server can override
+        // the embedded audio tags and derive the on-disk filename from the title.
+        if (meta?.title?.trim())  form.append("title",  meta.title.trim());
+        if (meta?.artist?.trim()) form.append("artist", meta.artist.trim());
+        if (meta?.album?.trim())  form.append("album",  meta.album.trim());
+        if (meta?.genre?.trim())  form.append("genre",  meta.genre.trim());
 
         const xhr = new XMLHttpRequest();
 

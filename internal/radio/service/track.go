@@ -129,10 +129,55 @@ type UploadResult struct {
 	Added bool // true if this is a new track; false if a duplicate
 }
 
+// UploadMeta holds optional metadata to apply to a freshly uploaded track.
+// Empty strings are ignored; the embedded file tags are used as the fallback.
+type UploadMeta struct {
+	Title  string
+	Artist string
+	Album  string
+	Genre  string
+}
+
+// sanitizeFilename replaces characters that are unsafe in cross-platform
+// filenames (path separators, shell-special bytes, NUL) with underscores.
+func sanitizeFilename(name string) string {
+	const unsafe = `/\:*?"<>|`
+	b := []byte(strings.TrimSpace(name))
+	for i, ch := range b {
+		if ch == 0 || strings.ContainsRune(unsafe, rune(ch)) {
+			b[i] = '_'
+		}
+	}
+	return string(b)
+}
+
+// uniqueDestPath returns a path under dir for filename that does not collide
+// with an existing file. If filename is already free it is returned as-is;
+// otherwise a numbered suffix is appended: "name (1).ext", "name (2).ext", …
+func uniqueDestPath(dir, filename string) string {
+	ext := filepath.Ext(filename)
+	stem := strings.TrimSuffix(filename, ext)
+	dest := filepath.Join(dir, filename)
+	for i := 1; ; i++ {
+		if _, err := os.Stat(dest); os.IsNotExist(err) {
+			return dest
+		}
+		dest = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", stem, i, ext))
+	}
+}
+
 // Upload saves the provided audio content to the music directory under the
 // given filename, registers it in the track library, and persists state.
 // Returns an error if the extension is unsupported or if any I/O fails.
-func (s *TrackService) Upload(filename string, content io.Reader) (*UploadResult, error) {
+//
+// Collision avoidance: if a file with the chosen name already exists on disk
+// (regardless of content) a numbered suffix is appended before writing, so
+// uploading "audio.mp3" twice produces "audio.mp3" and "audio (1).mp3".
+//
+// Metadata: if meta.Title is non-empty it is used both as the saved filename
+// (sanitised + original extension) and as the track's Title tag. Other meta
+// fields override whatever is embedded in the file's audio tags.
+func (s *TrackService) Upload(filename string, content io.Reader, meta UploadMeta) (*UploadResult, error) {
 	if s.master.Library == nil {
 		return nil, fmt.Errorf("track library not initialised")
 	}
@@ -143,15 +188,28 @@ func (s *TrackService) Upload(filename string, content io.Reader) (*UploadResult
 			ext, strings.Join(playlist.SupportedFormats, ", "))
 	}
 
-	// Clean the filename to prevent path traversal.
-	safe := filepath.Base(filepath.Clean(filename))
-	dest := filepath.Join(s.cfg.MusicDir, safe)
+	// Determine the base name: prefer meta.Title (sanitized) over the original
+	// filename so the on-disk name matches what the user typed.
+	var baseName string
+	if meta.Title != "" {
+		sanitized := sanitizeFilename(meta.Title)
+		if sanitized == "" {
+			sanitized = "track"
+		}
+		baseName = sanitized + ext
+	} else {
+		baseName = filepath.Base(filepath.Clean(filename))
+	}
 
 	// Ensure the destination is within the music directory.
 	absMusic, err := filepath.Abs(s.cfg.MusicDir)
 	if err != nil {
 		return nil, fmt.Errorf("could not resolve music directory: %w", err)
 	}
+
+	// Find a non-colliding destination path.
+	dest := uniqueDestPath(absMusic, baseName)
+
 	absDest, err := filepath.Abs(dest)
 	if err != nil {
 		return nil, fmt.Errorf("could not resolve destination path: %w", err)
@@ -161,7 +219,7 @@ func (s *TrackService) Upload(filename string, content io.Reader) (*UploadResult
 	}
 
 	// Write the file to disk.
-	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create file: %w", err)
 	}
@@ -182,11 +240,26 @@ func (s *TrackService) Upload(filename string, content io.Reader) (*UploadResult
 		return nil, fmt.Errorf("failed to read audio metadata: %w", err)
 	}
 
+	// Apply caller-supplied metadata overrides before registering in the library
+	// so that whatever is stored is already correct.
+	if meta.Title != "" {
+		track.Title = meta.Title
+	}
+	if meta.Artist != "" {
+		track.Artist = meta.Artist
+	}
+	if meta.Album != "" {
+		track.Album = meta.Album
+	}
+	if meta.Genre != "" {
+		track.Genre = meta.Genre
+	}
+
 	canonical, added := s.master.Library.Add(track)
 
 	if added {
 		slog.Info("Track uploaded and registered in library",
-			"file", safe,
+			"file", filepath.Base(dest),
 			"track_id", canonical.ID,
 			"title", canonical.Title,
 		)
@@ -196,7 +269,7 @@ func (s *TrackService) Upload(filename string, content io.Reader) (*UploadResult
 		// knows this checksum (possibly under a different filename).
 		os.Remove(dest)
 		slog.Info("Uploaded file is a duplicate of an existing track",
-			"file", safe,
+			"file", filepath.Base(dest),
 			"existing_track_id", canonical.ID,
 		)
 	}
