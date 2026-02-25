@@ -277,3 +277,64 @@ export async function setTimezone(timezone) {
 export async function reconcile() {
     return request("POST", "/api/reconcile");
 }
+
+// ---------------------------------------------------------------------------
+// Track upload
+// ---------------------------------------------------------------------------
+
+/**
+ * Upload one audio file to the server.
+ *
+ * @param {File} file - The File object to upload.
+ * @param {{ onProgress?: (percent: number) => void }} [opts]
+ * @returns {Promise<{ status: string, added: boolean, track: object }>}
+ */
+export function uploadTrack(file, { onProgress } = {}) {
+    return new Promise((resolve, reject) => {
+        const token = getToken();
+        const form = new FormData();
+        form.append("file", file);
+
+        const xhr = new XMLHttpRequest();
+
+        xhr.upload.addEventListener("progress", (e) => {
+            if (e.lengthComputable && onProgress) {
+                onProgress(Math.round((e.loaded / e.total) * 100));
+            }
+        });
+
+        xhr.addEventListener("load", () => {
+            let data;
+            try {
+                data = JSON.parse(xhr.responseText);
+            } catch {
+                reject(new ApiError("Invalid server response", xhr.status, null));
+                return;
+            }
+            if (xhr.status === 401) {
+                window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+            }
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(data);
+            } else {
+                const msg =
+                    data?.error?.message || data?.error || xhr.statusText;
+                reject(new ApiError(msg, xhr.status, data));
+            }
+        });
+
+        xhr.addEventListener("error", () => {
+            reject(new ApiError("Network error during upload", 0, null));
+        });
+
+        xhr.addEventListener("abort", () => {
+            reject(new ApiError("Upload was cancelled", 0, null));
+        });
+
+        xhr.open("POST", "/api/tracks/upload");
+        if (token) {
+            xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+        }
+        xhr.send(form);
+    });
+}

@@ -38,6 +38,7 @@
     } from "../lib/api.js";
     import TrackList from "../components/TrackList.svelte";
     import NowPlaying from "../components/NowPlaying.svelte";
+    import TrackUpload from "../components/TrackUpload.svelte";
 
     // ---------------------------------------------------------------------------
     // Sidebar state
@@ -114,6 +115,7 @@
     let savingTrack = false;
     let scanning = false;
     let trackSearchQuery = "";
+    let showUploadPanel = false;
 
     // Assign to tag
     let assignTag = "morning";
@@ -1914,7 +1916,52 @@
                         {/if}
                         🔄 Reconcile
                     </button>
+                    <button
+                        type="button"
+                        class="px-4 py-2 text-sm font-medium rounded-lg border transition-colors flex items-center gap-2
+                            {showUploadPanel
+                            ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-400'
+                            : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
+                        on:click={() => (showUploadPanel = !showUploadPanel)}
+                    >
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                        </svg>
+                        Upload Files
+                    </button>
                 </div>
+
+                <!-- Upload panel -->
+                {#if showUploadPanel}
+                    <div class="bg-white dark:bg-gray-800 rounded-xl border border-primary-200 dark:border-primary-800 overflow-hidden">
+                        <div class="flex items-center justify-between px-5 py-4 border-b border-primary-100 dark:border-primary-800 bg-primary-50 dark:bg-primary-900/20">
+                            <h3 class="text-base font-semibold text-primary-800 dark:text-primary-300 flex items-center gap-2">
+                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                                </svg>
+                                Upload Audio Files
+                            </h3>
+                            <button
+                                type="button"
+                                class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                                on:click={() => (showUploadPanel = false)}
+                                aria-label="Close upload panel"
+                            >
+                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="p-5">
+                            <TrackUpload
+                                on:uploaded={(e) => {
+                                    toasts.success(`Uploaded: ${e.detail.track.title || e.detail.track.filePath}`);
+                                    loadAllTracks();
+                                }}
+                            />
+                        </div>
+                    </div>
+                {/if}
 
                 {#if reconcileResult}
                     <div

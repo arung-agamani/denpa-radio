@@ -96,6 +96,45 @@ func (p *Playlist) TrackChecksums() []string {
 	return cs
 }
 
+// relocateCursorUnsafe re-computes currentIndex from CurrentTrackChecksum
+// after any structural mutation to the Tracks slice. Must be called with
+// p.mu held for writing.
+//
+// Semantics of currentIndex: it is the index of the track that will be
+// returned by the NEXT call to Next(). CurrentTrackChecksum holds the
+// checksum of the track that was last returned by Next() (the one currently
+// being streamed). Therefore, after finding the currently-playing track at
+// position i, the cursor must be placed at (i+1) % len so that playback
+// continues with the track after it.
+func (p *Playlist) relocateCursorUnsafe() {
+	if len(p.Tracks) == 0 {
+		p.currentIndex = 0
+		p.CurrentTrackChecksum = ""
+		return
+	}
+
+	if p.CurrentTrackChecksum == "" {
+		// Nothing has been played yet; clamp to a valid position.
+		if p.currentIndex >= len(p.Tracks) {
+			p.currentIndex = 0
+		}
+		return
+	}
+
+	// Find the currently-playing track and advance one step past it.
+	for i, t := range p.Tracks {
+		if t.Checksum == p.CurrentTrackChecksum {
+			p.currentIndex = (i + 1) % len(p.Tracks)
+			return
+		}
+	}
+
+	// Currently-playing track was removed; keep the cursor in bounds.
+	if p.currentIndex >= len(p.Tracks) {
+		p.currentIndex = 0
+	}
+}
+
 // ResolveFromLibrary replaces the Tracks slice with canonical pointers from
 // the given library, matched by checksum. Tracks whose checksums are not found
 // in the library are silently dropped.
@@ -113,25 +152,7 @@ func (p *Playlist) ResolveFromLibrary(lib *TrackLibrary) {
 	}
 	p.Tracks = resolved
 
-	// Re-locate the current track by checksum.
-	if p.CurrentTrackChecksum != "" {
-		found := false
-		for i, t := range p.Tracks {
-			if t.Checksum == p.CurrentTrackChecksum {
-				p.currentIndex = i
-				found = true
-				break
-			}
-		}
-		if !found {
-			p.currentIndex = 0
-			p.CurrentTrackChecksum = ""
-		}
-	}
-
-	if p.currentIndex >= len(p.Tracks) {
-		p.currentIndex = 0
-	}
+	p.relocateCursorUnsafe()
 }
 
 // NewPlaylist creates a new empty Playlist with the given name and tag.
@@ -241,6 +262,7 @@ func (p *Playlist) AddTrack(track *Track) {
 	}
 
 	p.Tracks = append(p.Tracks, track)
+	p.relocateCursorUnsafe()
 }
 
 // AddTrackByChecksum looks up the track in the associated library and appends
@@ -260,11 +282,15 @@ func (p *Playlist) AddTrackByChecksum(checksum string) error {
 	}
 
 	p.Tracks = append(p.Tracks, t)
+	p.relocateCursorUnsafe()
 	return nil
 }
 
 // AddTrackAt inserts a track at the specified index. If the index is out of
-// range the track is appended to the end.
+// range the track is appended to the end. The playback cursor is preserved:
+// a track inserted at or before the next-to-play position becomes the new
+// next-to-play track; a track inserted strictly after the cursor does not
+// disturb it.
 func (p *Playlist) AddTrackAt(track *Track, index int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -277,6 +303,7 @@ func (p *Playlist) AddTrackAt(track *Track, index int) {
 
 	if index < 0 || index >= len(p.Tracks) {
 		p.Tracks = append(p.Tracks, track)
+		p.relocateCursorUnsafe()
 		return
 	}
 
@@ -284,10 +311,7 @@ func (p *Playlist) AddTrackAt(track *Track, index int) {
 	copy(p.Tracks[index+1:], p.Tracks[index:])
 	p.Tracks[index] = track
 
-	// Adjust current index if needed.
-	if index <= p.currentIndex && len(p.Tracks) > 1 {
-		p.currentIndex++
-	}
+	p.relocateCursorUnsafe()
 }
 
 // AddTracks appends multiple tracks to the end of the playlist.
@@ -304,6 +328,7 @@ func (p *Playlist) AddTracks(tracks []*Track) {
 		}
 		p.Tracks = append(p.Tracks, t)
 	}
+	p.relocateCursorUnsafe()
 }
 
 // RemoveTrack removes the track at the given index and returns it. Returns an
@@ -318,16 +343,7 @@ func (p *Playlist) RemoveTrack(index int) (*Track, error) {
 
 	removed := p.Tracks[index]
 	p.Tracks = append(p.Tracks[:index], p.Tracks[index+1:]...)
-
-	// Adjust current index.
-	if len(p.Tracks) == 0 {
-		p.currentIndex = 0
-		p.CurrentTrackChecksum = ""
-	} else if index < p.currentIndex {
-		p.currentIndex--
-	} else if p.currentIndex >= len(p.Tracks) {
-		p.currentIndex = 0
-	}
+	p.relocateCursorUnsafe()
 
 	return removed, nil
 }
@@ -341,16 +357,7 @@ func (p *Playlist) RemoveTrackByID(id int64) (*Track, error) {
 		if t.ID == id {
 			removed := p.Tracks[i]
 			p.Tracks = append(p.Tracks[:i], p.Tracks[i+1:]...)
-
-			if len(p.Tracks) == 0 {
-				p.currentIndex = 0
-				p.CurrentTrackChecksum = ""
-			} else if i < p.currentIndex {
-				p.currentIndex--
-			} else if p.currentIndex >= len(p.Tracks) {
-				p.currentIndex = 0
-			}
-
+			p.relocateCursorUnsafe()
 			return removed, nil
 		}
 	}
@@ -366,16 +373,7 @@ func (p *Playlist) RemoveTrackByChecksum(checksum string) (*Track, error) {
 		if t.Checksum == checksum {
 			removed := p.Tracks[i]
 			p.Tracks = append(p.Tracks[:i], p.Tracks[i+1:]...)
-
-			if len(p.Tracks) == 0 {
-				p.currentIndex = 0
-				p.CurrentTrackChecksum = ""
-			} else if i < p.currentIndex {
-				p.currentIndex--
-			} else if p.currentIndex >= len(p.Tracks) {
-				p.currentIndex = 0
-			}
-
+			p.relocateCursorUnsafe()
 			return removed, nil
 		}
 	}
@@ -400,25 +398,12 @@ func (p *Playlist) RemoveTracksByChecksum(checksum string) int {
 	}
 	p.Tracks = alive
 
-	if len(p.Tracks) == 0 {
-		p.currentIndex = 0
-		p.CurrentTrackChecksum = ""
-	} else if p.currentIndex >= len(p.Tracks) {
-		p.currentIndex = 0
-	}
-
-	// Re-locate current track.
+	// If the currently-playing track was removed, clear the checksum so
+	// relocateCursorUnsafe falls back gracefully.
 	if p.CurrentTrackChecksum == checksum {
 		p.CurrentTrackChecksum = ""
-		p.currentIndex = 0
-	} else if p.CurrentTrackChecksum != "" {
-		for i, t := range p.Tracks {
-			if t.Checksum == p.CurrentTrackChecksum {
-				p.currentIndex = i
-				break
-			}
-		}
 	}
+	p.relocateCursorUnsafe()
 
 	return removed
 }
@@ -449,16 +434,7 @@ func (p *Playlist) MoveTrack(from, to int) error {
 	copy(p.Tracks[to+1:], p.Tracks[to:])
 	p.Tracks[to] = track
 
-	// Update current index to follow the currently-playing track.
-	if p.CurrentTrackChecksum != "" {
-		for i, t := range p.Tracks {
-			if t.Checksum == p.CurrentTrackChecksum {
-				p.currentIndex = i
-				break
-			}
-		}
-	}
-
+	p.relocateCursorUnsafe()
 	return nil
 }
 
@@ -472,18 +448,7 @@ func (p *Playlist) Shuffle() {
 		p.Tracks[i], p.Tracks[j] = p.Tracks[j], p.Tracks[i]
 	})
 
-	// Re-locate the current track by checksum.
-	if p.CurrentTrackChecksum != "" {
-		for i, t := range p.Tracks {
-			if t.Checksum == p.CurrentTrackChecksum {
-				p.currentIndex = i
-				return
-			}
-		}
-		// Checksum not found (track was removed); reset.
-		p.currentIndex = 0
-		p.CurrentTrackChecksum = ""
-	}
+	p.relocateCursorUnsafe()
 }
 
 // Next returns the next track in the playlist and advances the internal
