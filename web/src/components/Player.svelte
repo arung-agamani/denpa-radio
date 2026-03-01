@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { isPlaying } from '../lib/stores';
+  import { onMount } from 'svelte';
+  import { isPlaying, currentTrackInfo, stationName } from '../lib/stores';
 
   let audioEl: HTMLAudioElement | undefined;
   let volume = 0.8;
@@ -8,6 +9,98 @@
 
   const streamUrl = '/stream';
 
+  // ------------------------------------------------------------------
+  // Stall / reconnect logic
+  // If the stream enters a buffering state for longer than STALL_TIMEOUT_MS
+  // we silently reload the source so minor network hiccups self-heal.
+  // ------------------------------------------------------------------
+  const STALL_TIMEOUT_MS = 5000;
+  let stallTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function startStallTimer() {
+    clearStallTimer();
+    stallTimer = setTimeout(() => {
+      if ($isPlaying) {
+        console.warn('[Player] Stream stalled for 5 s – reconnecting…');
+        reconnect();
+      }
+    }, STALL_TIMEOUT_MS);
+  }
+
+  function clearStallTimer() {
+    if (stallTimer !== null) {
+      clearTimeout(stallTimer);
+      stallTimer = null;
+    }
+  }
+
+  function reconnect() {
+    if (!audioEl) return;
+    clearStallTimer();
+    audioEl.src = streamUrl;
+    audioEl.load();
+    audioEl.volume = volume;
+    audioEl.play().catch((err: Error) => {
+      if (err.name !== 'AbortError') {
+        error = 'Stream connection lost. Click play to reconnect.';
+        $isPlaying = false;
+        loading = false;
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Media Session API helpers
+  // Registers OS-level playback actions (keyboard media keys, lock screen
+  // controls on Android / macOS / Windows) and keeps the track metadata
+  // in sync so the OS displays the current track title and artist.
+  // ------------------------------------------------------------------
+  function setupMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+
+    navigator.mediaSession.setActionHandler('play', () => {
+      if (!$isPlaying) play();
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      if ($isPlaying) stop();
+    });
+    navigator.mediaSession.setActionHandler('stop', () => {
+      stop();
+    });
+  }
+
+  function updateMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+
+    const track = $currentTrackInfo;
+    const station = $stationName || 'Denpa Radio';
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: track?.title || station,
+      artist: track?.artist || station,
+      album: track?.album || station,
+    });
+
+    navigator.mediaSession.playbackState = 'playing';
+  }
+
+  function clearMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = 'none';
+  }
+
+  // Re-push track metadata to the OS whenever the current track changes.
+  $: if ($isPlaying && $currentTrackInfo !== null) {
+    updateMediaSession();
+  }
+
+  onMount(() => {
+    setupMediaSession();
+  });
+
+  // ------------------------------------------------------------------
+  // Playback control
+  // ------------------------------------------------------------------
   function play() {
     if (!audioEl) return;
     error = null;
@@ -24,6 +117,7 @@
         .then(() => {
           $isPlaying = true;
           loading = false;
+          updateMediaSession();
         })
         .catch((err: Error) => {
           // Ignore AbortError which happens when the user stops quickly.
@@ -39,12 +133,14 @@
 
   function stop() {
     if (!audioEl) return;
+    clearStallTimer();
     audioEl.pause();
     audioEl.removeAttribute('src');
     audioEl.load();
     $isPlaying = false;
     loading = false;
     error = null;
+    clearMediaSession();
   }
 
   function toggle() {
@@ -68,17 +164,28 @@
       $isPlaying = false;
       loading = false;
     }
+    clearStallTimer();
+    clearMediaSession();
   }
 
   function handleWaiting() {
     if ($isPlaying) {
       loading = true;
+      startStallTimer();
     }
   }
 
   function handlePlaying() {
     loading = false;
     error = null;
+    clearStallTimer();
+  }
+
+  function handleStalled() {
+    if ($isPlaying) {
+      loading = true;
+      startStallTimer();
+    }
   }
 
   $: volumePercent = Math.round(volume * 100);
@@ -101,6 +208,7 @@
     on:error={handleError}
     on:waiting={handleWaiting}
     on:playing={handlePlaying}
+    on:stalled={handleStalled}
   />
 
   <div class="flex flex-col gap-4">
