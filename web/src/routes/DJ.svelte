@@ -1,7 +1,7 @@
-<script>
+<script lang="ts">
     import { onMount } from "svelte";
-    import { segments, navigate } from "../lib/router.js";
-    import { playlists, master, scheduler, status } from "../lib/stores.js";
+    import { segments, navigate } from "../lib/router";
+    import { playlists, master, scheduler, status } from "../lib/stores";
     import Dashboard from "./dj/Dashboard.svelte";
     import Playlists from "./dj/Playlists.svelte";
     import Master from "./dj/Master.svelte";
@@ -23,7 +23,7 @@
         ? $segments[1]
         : "dashboard";
 
-    function selectSection(id) {
+    function selectSection(id: string): void {
         navigate("/dj/" + id);
         sidebarOpen = false;
     }

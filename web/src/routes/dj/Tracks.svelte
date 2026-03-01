@@ -1,4 +1,5 @@
-<script>
+<script lang="ts">
+    import type { Track, ReconcileResult } from "../../lib/api";
     import {
         listTracks,
         listOrphanedTracks,
@@ -6,8 +7,8 @@
         deleteTrack,
         scanTracks,
         reconcile,
-    } from "../../lib/api.js";
-    import { playlists, master, trackLibrary, toasts } from "../../lib/stores.js";
+    } from "../../lib/api";
+    import { playlists, master, trackLibrary, toasts } from "../../lib/stores";
     import TrackList from "../../components/TrackList.svelte";
     import TrackUpload from "../../components/TrackUpload.svelte";
 
@@ -15,8 +16,8 @@
     // Track library state
     // ---------------------------------------------------------------------------
 
-    let allTracks = [];
-    let orphanedTracks = [];
+    let allTracks: Track[] = [];
+    let orphanedTracks: Track[] = [];
     let loadingTracks = false;
     let loadingOrphaned = false;
     let trackSearchQuery = "";
@@ -24,21 +25,21 @@
 
     // Reconcile
     let reconciling = false;
-    let reconcileResult = null;
+    let reconcileResult: ReconcileResult | null = null;
 
     // Track editing
-    let editingTrackId = null;
+    let editingTrackId: number | null = null;
     let editTrackTitle = "";
     let editTrackArtist = "";
     let editTrackAlbum = "";
     let editTrackGenre = "";
-    let editTrackYear = null;
-    let editTrackNum = null;
+    let editTrackYear: number | null = null;
+    let editTrackNum: number | null = null;
     let savingTrack = false;
     let scanning = false;
 
     // Confirm delete
-    let confirmDeleteTrackId = null;
+    let confirmDeleteTrackId: number | null = null;
     let confirmDeleteFromDisk = false;
 
     // ---------------------------------------------------------------------------
@@ -52,7 +53,7 @@
             allTracks = data.tracks || [];
             trackLibrary.refresh();
         } catch (err) {
-            toasts.error("Failed to load tracks: " + err.message);
+            toasts.error("Failed to load tracks: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             loadingTracks = false;
         }
@@ -64,7 +65,7 @@
             const data = await listOrphanedTracks();
             orphanedTracks = data.tracks || [];
         } catch (err) {
-            toasts.error("Failed to load orphaned tracks: " + err.message);
+            toasts.error("Failed to load orphaned tracks: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             loadingOrphaned = false;
         }
@@ -79,7 +80,7 @@
             );
             await loadAllTracks();
         } catch (err) {
-            toasts.error("Scan failed: " + err.message);
+            toasts.error("Scan failed: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             scanning = false;
         }
@@ -99,7 +100,7 @@
             await loadAllTracks();
             await loadOrphanedTracksData();
         } catch (err) {
-            toasts.error("Reconcile failed: " + err.message);
+            toasts.error("Reconcile failed: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             reconciling = false;
         }
@@ -109,14 +110,14 @@
     // Track editing
     // ---------------------------------------------------------------------------
 
-    function startEditTrack(track) {
+    function startEditTrack(track: Track): void {
         editingTrackId = track.id;
         editTrackTitle = track.title || "";
         editTrackArtist = track.artist || "";
         editTrackAlbum = track.album || "";
         editTrackGenre = track.genre || "";
-        editTrackYear = track.year || null;
-        editTrackNum = track.trackNum || null;
+        editTrackYear = track.year ?? null;
+        editTrackNum = track.track_num ?? null;
     }
 
     function cancelEditTrack() {
@@ -128,27 +129,27 @@
         if (!editingTrackId) return;
         savingTrack = true;
         try {
-            const updates = {};
+            const updates: Partial<Track> = {};
             updates.title = editTrackTitle;
             updates.artist = editTrackArtist;
             updates.album = editTrackAlbum;
             updates.genre = editTrackGenre;
-            if (editTrackYear !== null && editTrackYear !== "")
-                updates.year = parseInt(editTrackYear);
-            if (editTrackNum !== null && editTrackNum !== "")
-                updates.trackNum = parseInt(editTrackNum);
+            if (editTrackYear !== null)
+                updates.year = editTrackYear;
+            if (editTrackNum !== null)
+                updates.track_num = editTrackNum;
             await updateTrack(editingTrackId, updates);
             toasts.success("Track metadata updated!");
             editingTrackId = null;
             await loadAllTracks();
         } catch (err) {
-            toasts.error("Failed to update track: " + err.message);
+            toasts.error("Failed to update track: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             savingTrack = false;
         }
     }
 
-    async function handleDeleteTrack(id) {
+    async function handleDeleteTrack(id: number): Promise<void> {
         try {
             await deleteTrack(id, { deleteFromDisk: confirmDeleteFromDisk });
             const msg = confirmDeleteFromDisk
@@ -161,7 +162,7 @@
             await playlists.refresh();
             await master.refresh();
         } catch (err) {
-            toasts.error("Failed to delete track: " + err.message);
+            toasts.error("Failed to delete track: " + (err instanceof Error ? err.message : String(err)));
         }
     }
 
@@ -507,13 +508,22 @@
 <!-- Confirm delete track modal -->
 {#if confirmDeleteTrackId}
     <div
-        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
         on:click|self={() => { confirmDeleteTrackId = null; confirmDeleteFromDisk = false; }}
-        role="dialog"
-        aria-modal="true"
+        on:keydown={(e) => { if (e.key === 'Escape') { confirmDeleteTrackId = null; confirmDeleteFromDisk = false; } }}
+        role="button"
+        tabindex="-1"
+        aria-label="Close dialog"
     >
-        <div class="absolute inset-0 bg-black/50" />
-        <div class="relative bg-white dark:bg-gray-800 rounded-2xl shadow-xl max-w-sm w-full p-6">
+        <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+        <div
+            class="relative bg-white dark:bg-gray-800 rounded-2xl shadow-xl max-w-sm w-full p-6"
+            role="dialog"
+            aria-modal="true"
+            tabindex="-1"
+            on:click|stopPropagation
+            on:keydown|stopPropagation
+        >
             <div class="text-center">
                 <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 dark:bg-red-900/40 mb-4">
                     <svg class="h-6 w-6 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -551,7 +561,7 @@
                     <button
                         type="button"
                         class="px-4 py-2 text-sm font-medium rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors"
-                        on:click={() => handleDeleteTrack(confirmDeleteTrackId)}
+                        on:click={() => { if (confirmDeleteTrackId !== null) handleDeleteTrack(confirmDeleteTrackId); }}
                     >
                         {confirmDeleteFromDisk ? "Delete Forever" : "Delete"}
                     </button>

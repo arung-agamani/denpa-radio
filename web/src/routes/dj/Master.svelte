@@ -1,14 +1,14 @@
-<script>
-    import { assignPlaylistToTag, removePlaylistFromTag } from "../../lib/api.js";
-    import { playlists, master, status, toasts } from "../../lib/stores.js";
-    import { tagEmoji, tagLabel, tagColors } from "../../lib/tags.js";
+<script lang="ts">
+    import { assignPlaylistToTag, removePlaylistFromTag } from "../../lib/api";
+    import { playlists, master, status, toasts } from "../../lib/stores";
+    import { tagEmoji, tagLabel, tagColors } from "../../lib/tags";
 
     // ---------------------------------------------------------------------------
     // Assign form state
     // ---------------------------------------------------------------------------
 
     let assignTag = "morning";
-    let assignPlaylistId = null;
+    let assignPlaylistId: number | null = null;
 
     async function handleAssignToTag() {
         if (!assignPlaylistId) {
@@ -16,24 +16,24 @@
             return;
         }
         try {
-            await assignPlaylistToTag(assignTag, parseInt(assignPlaylistId));
+            await assignPlaylistToTag(assignTag, assignPlaylistId);
             toasts.success("Playlist assigned to " + tagLabel[assignTag] + "!");
             assignPlaylistId = null;
             await master.refresh();
             await playlists.refresh();
         } catch (err) {
-            toasts.error("Failed to assign: " + err.message);
+            toasts.error("Failed to assign: " + (err instanceof Error ? err.message : String(err)));
         }
     }
 
-    async function handleRemoveFromTag(tag, playlistId) {
+    async function handleRemoveFromTag(tag: string, playlistId: number): Promise<void> {
         try {
             await removePlaylistFromTag(tag, playlistId);
             toasts.success("Playlist removed from " + tagLabel[tag]);
             await master.refresh();
             await playlists.refresh();
         } catch (err) {
-            toasts.error("Failed to remove: " + err.message);
+            toasts.error("Failed to remove: " + (err instanceof Error ? err.message : String(err)));
         }
     }
 

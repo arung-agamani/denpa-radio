@@ -1,8 +1,8 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
-  import { path, segment } from './lib/router.js';
-  import { auth, isAuthenticated } from './lib/auth.js';
-  import { status, toasts } from './lib/stores.js';
+  import { path, segment } from './lib/router';
+  import { auth, isAuthenticated } from './lib/auth';
+  import { status, toasts } from './lib/stores';
   import Public from './routes/Public.svelte';
   import DJ from './routes/DJ.svelte';
   import Login from './routes/Login.svelte';

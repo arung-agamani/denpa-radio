@@ -1,14 +1,15 @@
-<script>
+<script lang="ts">
+  import type { TrackItem } from '../lib/api';
   import { onMount } from 'svelte';
   import Player from '../components/Player.svelte';
   import NowPlaying from '../components/NowPlaying.svelte';
   import TrackList from '../components/TrackList.svelte';
-  import { status, stationName, currentTrackInfo } from '../lib/stores.js';
-  import { getQueue } from '../lib/api.js';
+  import { status, stationName, currentTrackInfo } from '../lib/stores';
+  import { getQueue } from '../lib/api';
 
-  let tracks = [];
+  let tracks: TrackItem[] = [];
   let loading = true;
-  let error = null;
+  let error: string | null = null;
   let showFullQueue = false;
 
   onMount(async () => {
@@ -23,7 +24,7 @@
       tracks = data.tracks || [];
     } catch (err) {
       console.error('Failed to load queue:', err);
-      error = err.message || 'Failed to load queue';
+      error = err instanceof Error ? err instanceof Error ? err.message : String(err) : 'Failed to load queue';
     } finally {
       loading = false;
     }

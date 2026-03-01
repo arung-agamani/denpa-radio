@@ -1,6 +1,7 @@
-<script>
+<script lang="ts">
     import { createEventDispatcher } from "svelte";
-    import { uploadTrack } from "../lib/api.js";
+    import { uploadTrack } from "../lib/api";
+    import type { Track } from "../lib/api";
 
     const dispatch = createEventDispatcher();
 
@@ -13,14 +14,37 @@
     const MAX_BYTES = 100 * 1024 * 1024; // 100 MiB
 
     // --------------------------------------------------------------------------
+    // Types
+    // --------------------------------------------------------------------------
+
+    type EntryStatus = "queued" | "uploading" | "done" | "error" | "duplicate";
+
+    interface UploadMeta {
+        title: string;
+        artist: string;
+        album: string;
+        genre: string;
+    }
+
+    interface QueueEntry {
+        id: number;
+        file: File;
+        status: EntryStatus;
+        progress: number;
+        track?: Track;
+        error?: string;
+        meta: UploadMeta;
+        optimize: boolean;
+    }
+
+    // --------------------------------------------------------------------------
     // State
     // --------------------------------------------------------------------------
 
-    /** @type {Array<{id: number, file: File, status: 'queued'|'uploading'|'done'|'error'|'duplicate', progress: number, track?: object, error?: string, meta: {title:string,artist:string,album:string,genre:string}, optimize: boolean}>} */
-    let queue = [];
+    let queue: QueueEntry[] = [];
     let idCounter = 0;
     let isDragging = false;
-    let fileInput;
+    let fileInput: HTMLInputElement | undefined;
 
     // Global default for optimize toggle
     let globalOptimize = true;
@@ -40,23 +64,23 @@
     // Helpers
     // --------------------------------------------------------------------------
 
-    function formatBytes(bytes) {
+    function formatBytes(bytes: number): string {
         if (bytes < 1024) return `${bytes} B`;
         if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
         return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     }
 
-    function isAudioFile(file) {
-        const ext = "." + file.name.split(".").pop().toLowerCase();
+    function isAudioFile(file: File): boolean {
+        const ext = "." + file.name.split(".").pop()!.toLowerCase();
         return ACCEPTED.includes(ext);
     }
 
-    function getFileExt(name) {
+    function getFileExt(name: string): string {
         return name.slice(name.lastIndexOf('.')).toLowerCase();
     }
 
     /** Compute the resulting filename that will be stored on disk */
-    function resultingFilename(entry) {
+    function resultingFilename(entry: QueueEntry): string {
         const ext = getFileExt(entry.file.name);
         const base = entry.meta.title.trim()
             ? entry.meta.title.trim()
@@ -66,7 +90,7 @@
         return base + outExt;
     }
 
-    function addFiles(files) {
+    function addFiles(files: File[]): void {
         for (const file of files) {
             if (!isAudioFile(file)) continue;
             if (file.size > MAX_BYTES) {
@@ -102,7 +126,7 @@
     // Upload logic
     // --------------------------------------------------------------------------
 
-    async function startUpload() {
+    async function startUpload(): Promise<void> {
         const pending = queue.filter((e) => e.status === "queued");
         for (const entry of pending) {
             setStatus(entry.id, "uploading");
@@ -119,34 +143,34 @@
                     setStatus(entry.id, "duplicate", { track: result.track });
                 }
             } catch (err) {
-                setStatus(entry.id, "error", { error: err.message });
+                setStatus(entry.id, "error", { error: err instanceof Error ? err instanceof Error ? err.message : String(err) : String(err) });
             }
         }
     }
 
-    function setStatus(id, status, extra = {}) {
+    function setStatus(id: number, status: EntryStatus, extra: Partial<QueueEntry> = {}): void {
         queue = queue.map((e) =>
             e.id === id ? { ...e, status, progress: status === "done" || status === "duplicate" ? 100 : e.progress, ...extra } : e,
         );
     }
 
-    function setProgress(id, progress) {
+    function setProgress(id: number, progress: number): void {
         queue = queue.map((e) => (e.id === id ? { ...e, progress } : e));
     }
 
-    function removeEntry(id) {
+    function removeEntry(id: number): void {
         queue = queue.filter((e) => e.id !== id);
     }
 
-    function updateMeta(id, field, value) {
+    function updateMeta(id: number, field: keyof UploadMeta, value: string): void {
         queue = queue.map((e) => e.id === id ? { ...e, meta: { ...e.meta, [field]: value } } : e);
     }
 
-    function toggleOptimize(id) {
+    function toggleOptimize(id: number): void {
         queue = queue.map((e) => e.id === id ? { ...e, optimize: !e.optimize } : e);
     }
 
-    function clearCompleted() {
+    function clearCompleted(): void {
         queue = queue.filter((e) => !["done", "error", "duplicate"].includes(e.status));
     }
 
@@ -154,18 +178,18 @@
     // Drag & drop (file input)
     // --------------------------------------------------------------------------
 
-    function onDragOver(e) {
+    function onDragOver(e: DragEvent): void {
         e.preventDefault();
         isDragging = true;
     }
 
-    function onDragLeave(e) {
-        if (!e.currentTarget.contains(e.relatedTarget)) {
+    function onDragLeave(e: DragEvent): void {
+        if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
             isDragging = false;
         }
     }
 
-    function onDrop(e) {
+    function onDrop(e: DragEvent): void {
         e.preventDefault();
         isDragging = false;
         if (e.dataTransfer?.files) {
@@ -173,16 +197,17 @@
         }
     }
 
-    function onFileInput(e) {
-        addFiles(Array.from(e.target.files));
-        e.target.value = "";
+    function onFileInput(e: Event): void {
+        const input = e.target as HTMLInputElement;
+        addFiles(Array.from(input.files ?? []));
+        input.value = "";
     }
 
     // --------------------------------------------------------------------------
     // Status helpers
     // --------------------------------------------------------------------------
 
-    const statusLabel = {
+    const statusLabel: Record<EntryStatus, string> = {
         queued: "Queued",
         uploading: "Uploading…",
         done: "Uploaded",
@@ -190,7 +215,7 @@
         error: "Failed",
     };
 
-    const statusIconCls = {
+    const statusIconCls: Record<EntryStatus, string> = {
         queued:   "text-gray-400",
         uploading:"text-primary-500",
         done:     "text-green-500",
@@ -198,7 +223,7 @@
         error:    "text-red-500",
     };
 
-    const rowBg = {
+    const rowBg: Record<EntryStatus, string> = {
         queued:    "bg-white dark:bg-gray-800",
         uploading: "bg-primary-50 dark:bg-primary-900/10",
         done:      "bg-green-50 dark:bg-green-900/10",
@@ -244,8 +269,8 @@
         on:dragover={onDragOver}
         on:dragleave={onDragLeave}
         on:drop={onDrop}
-        on:click={() => fileInput.click()}
-        on:keydown={(e) => e.key === "Enter" && fileInput.click()}
+        on:click={() => fileInput?.click()}
+        on:keydown={(e) => e.key === "Enter" && fileInput?.click()}
         tabindex="0"
     >
         <input
@@ -442,10 +467,11 @@
                                 <!-- Metadata fields (always visible) -->
                                 <div class="grid grid-cols-2 gap-2">
                                     <div>
-                                        <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                                        <label for="meta-title-{entry.id}" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
                                             Title <span class="font-normal opacity-60">(becomes filename)</span>
                                         </label>
                                         <input
+                                            id="meta-title-{entry.id}"
                                             type="text"
                                             value={entry.meta.title}
                                             on:input={(e) => updateMeta(entry.id, 'title', e.currentTarget.value)}
@@ -454,8 +480,9 @@
                                         />
                                     </div>
                                     <div>
-                                        <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Artist</label>
+                                        <label for="meta-artist-{entry.id}" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Artist</label>
                                         <input
+                                            id="meta-artist-{entry.id}"
                                             type="text"
                                             value={entry.meta.artist}
                                             on:input={(e) => updateMeta(entry.id, 'artist', e.currentTarget.value)}
@@ -464,8 +491,9 @@
                                         />
                                     </div>
                                     <div>
-                                        <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Album</label>
+                                        <label for="meta-album-{entry.id}" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Album</label>
                                         <input
+                                            id="meta-album-{entry.id}"
                                             type="text"
                                             value={entry.meta.album}
                                             on:input={(e) => updateMeta(entry.id, 'album', e.currentTarget.value)}
@@ -474,8 +502,9 @@
                                         />
                                     </div>
                                     <div>
-                                        <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Genre</label>
+                                        <label for="meta-genre-{entry.id}" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Genre</label>
                                         <input
+                                            id="meta-genre-{entry.id}"
                                             type="text"
                                             value={entry.meta.genre}
                                             on:input={(e) => updateMeta(entry.id, 'genre', e.currentTarget.value)}

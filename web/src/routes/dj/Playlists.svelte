@@ -1,4 +1,5 @@
-<script>
+<script lang="ts">
+    import type { Track, Playlist } from "../../lib/api";
     import {
         getPlaylist,
         createPlaylist,
@@ -11,23 +12,23 @@
         exportPlaylist,
         listTracks,
         listOrphanedTracks,
-    } from "../../lib/api.js";
-    import { playlists, master, toasts } from "../../lib/stores.js";
-    import { tagEmoji, tagLabel, tagColors } from "../../lib/tags.js";
+    } from "../../lib/api";
+    import { playlists, master, toasts } from "../../lib/stores";
+    import { tagEmoji, tagLabel, tagColors } from "../../lib/tags";
     import TrackList from "../../components/TrackList.svelte";
 
     // ---------------------------------------------------------------------------
     // Shared data
     // ---------------------------------------------------------------------------
 
-    let allTracks = [];
-    let orphanedTracks = [];
+    let allTracks: Track[] = [];
+    let orphanedTracks: Track[] = [];
     let loadingTracks = false;
     let loadingOrphaned = false;
 
     // Selected playlist for editing
-    let selectedPlaylistId = null;
-    let selectedPlaylist = null;
+    let selectedPlaylistId: number | null = null;
+    let selectedPlaylist: Playlist | null = null;
     let loadingPlaylist = false;
 
     // Create playlist form
@@ -46,7 +47,7 @@
     let addTrackSource = "existing"; // 'existing' | 'orphaned'
 
     // Confirm delete
-    let confirmDeleteId = null;
+    let confirmDeleteId: number | null = null;
 
     // ---------------------------------------------------------------------------
     // Data loading helpers
@@ -58,7 +59,7 @@
             const data = await listTracks();
             allTracks = data.tracks || [];
         } catch (err) {
-            toasts.error("Failed to load tracks: " + err.message);
+            toasts.error("Failed to load tracks: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             loadingTracks = false;
         }
@@ -70,20 +71,20 @@
             const data = await listOrphanedTracks();
             orphanedTracks = data.tracks || [];
         } catch (err) {
-            toasts.error("Failed to load orphaned tracks: " + err.message);
+            toasts.error("Failed to load orphaned tracks: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             loadingOrphaned = false;
         }
     }
 
-    async function loadPlaylistDetail(id) {
+    async function loadPlaylistDetail(id: number): Promise<void> {
         loadingPlaylist = true;
         selectedPlaylistId = id;
         try {
             const data = await getPlaylist(id);
-            selectedPlaylist = data.playlist;
+            selectedPlaylist = (data as unknown as { playlist: Playlist }).playlist ?? (data as unknown as Playlist);
         } catch (err) {
-            toasts.error("Failed to load playlist: " + err.message);
+            toasts.error("Failed to load playlist: " + (err instanceof Error ? err.message : String(err)));
             selectedPlaylist = null;
         } finally {
             loadingPlaylist = false;
@@ -107,17 +108,17 @@
             await playlists.refresh();
             await master.refresh();
         } catch (err) {
-            toasts.error("Failed to create playlist: " + err.message);
+            toasts.error("Failed to create playlist: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             creatingPlaylist = false;
         }
     }
 
-    function startEdit(pl) {
+    function startEdit(pl: Playlist): void {
         editingPlaylist = true;
-        editName = pl.name || pl.Name;
-        editTag = pl.tag || pl.Tag;
-        selectedPlaylistId = pl.id || pl.ID;
+        editName = pl.name;
+        editTag = pl.tag;
+        selectedPlaylistId = pl.id;
     }
 
     async function saveEdit() {
@@ -126,7 +127,7 @@
             return;
         }
         try {
-            await updatePlaylist(selectedPlaylistId, {
+            await updatePlaylist(selectedPlaylistId!, {
                 name: editName.trim(),
                 tag: editTag,
             });
@@ -135,10 +136,10 @@
             await playlists.refresh();
             await master.refresh();
             if (selectedPlaylist) {
-                await loadPlaylistDetail(selectedPlaylistId);
+                await loadPlaylistDetail(selectedPlaylistId!);
             }
         } catch (err) {
-            toasts.error("Failed to update playlist: " + err.message);
+            toasts.error("Failed to update playlist: " + (err instanceof Error ? err.message : String(err)));
         }
     }
 
@@ -146,7 +147,7 @@
         editingPlaylist = false;
     }
 
-    async function handleDeletePlaylist(id) {
+    async function handleDeletePlaylist(id: number): Promise<void> {
         try {
             await deletePlaylist(id);
             toasts.success("Playlist deleted.");
@@ -158,7 +159,7 @@
             await playlists.refresh();
             await master.refresh();
         } catch (err) {
-            toasts.error("Failed to delete playlist: " + err.message);
+            toasts.error("Failed to delete playlist: " + (err instanceof Error ? err.message : String(err)));
         }
     }
 
@@ -166,7 +167,7 @@
     // Track manipulation
     // ---------------------------------------------------------------------------
 
-    async function handleRemoveTrack(e) {
+    async function handleRemoveTrack(e: CustomEvent<{ track: Track; index: number }>): Promise<void> {
         const { track } = e.detail;
         if (!selectedPlaylistId) return;
         try {
@@ -175,18 +176,18 @@
             await loadPlaylistDetail(selectedPlaylistId);
             await playlists.refresh();
         } catch (err) {
-            toasts.error("Failed to remove track: " + err.message);
+            toasts.error("Failed to remove track: " + (err instanceof Error ? err.message : String(err)));
         }
     }
 
-    async function handleMoveTrack(e) {
+    async function handleMoveTrack(e: CustomEvent<{ from: number; to: number; track: Track }>): Promise<void> {
         const { from, to } = e.detail;
         if (!selectedPlaylistId) return;
         try {
             await moveTrackInPlaylist(selectedPlaylistId, from, to);
             await loadPlaylistDetail(selectedPlaylistId);
         } catch (err) {
-            toasts.error("Failed to move track: " + err.message);
+            toasts.error("Failed to move track: " + (err instanceof Error ? err.message : String(err)));
         }
     }
 
@@ -197,7 +198,7 @@
             toasts.success("Playlist shuffled!");
             await loadPlaylistDetail(selectedPlaylistId);
         } catch (err) {
-            toasts.error("Failed to shuffle: " + err.message);
+            toasts.error("Failed to shuffle: " + (err instanceof Error ? err.message : String(err)));
         }
     }
 
@@ -209,7 +210,7 @@
         if (orphanedTracks.length === 0) await loadOrphanedTracksData();
     }
 
-    async function addTrackById(trackId) {
+    async function addTrackById(trackId: number): Promise<void> {
         if (!selectedPlaylistId) return;
         try {
             await addTrackToPlaylist(selectedPlaylistId, { trackId });
@@ -217,7 +218,7 @@
             await loadPlaylistDetail(selectedPlaylistId);
             await playlists.refresh();
         } catch (err) {
-            toasts.error("Failed to add track: " + err.message);
+            toasts.error("Failed to add track: " + (err instanceof Error ? err.message : String(err)));
         }
     }
 
@@ -229,7 +230,7 @@
     // Export
     // ---------------------------------------------------------------------------
 
-    async function handleExport(id) {
+    async function handleExport(id: number): Promise<void> {
         try {
             const { blob, filename } = await exportPlaylist(id);
             const url = URL.createObjectURL(blob);
@@ -242,7 +243,7 @@
             URL.revokeObjectURL(url);
             toasts.success("Playlist exported!");
         } catch (err) {
-            toasts.error("Export failed: " + err.message);
+            toasts.error("Export failed: " + (err instanceof Error ? err.message : String(err)));
         }
     }
 
@@ -409,7 +410,7 @@
                     <button
                         type="button"
                         class="px-5 py-2 text-sm font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors"
-                        on:click={() => handleDeletePlaylist(confirmDeleteId)}
+                        on:click={() => { if (confirmDeleteId !== null) handleDeletePlaylist(confirmDeleteId); }}
                     >
                         Delete
                     </button>
@@ -489,7 +490,7 @@
                             type="button"
                             class="p-2 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                             title="Edit playlist info"
-                            on:click={() => startEdit(selectedPlaylist)}
+                            on:click={() => { if (selectedPlaylist !== null) startEdit(selectedPlaylist); }}
                         >
                             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />

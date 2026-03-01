@@ -1,13 +1,13 @@
-<script>
-    import { login } from "../lib/api.js";
-    import { auth } from "../lib/auth.js";
-    import { navigate } from "../lib/router.js";
-    import { toasts } from "../lib/stores.js";
+<script lang="ts">
+    import { login, ApiError } from "../lib/api";
+    import { auth } from "../lib/auth";
+    import { navigate } from "../lib/router";
+    import { toasts } from "../lib/stores";
 
     let username = "";
     let password = "";
     let loading = false;
-    let error = null;
+    let error: string | null = null;
 
     async function handleSubmit() {
         if (!username.trim() || !password.trim()) {
@@ -24,20 +24,20 @@
             toasts.success(`Welcome back, ${data.username}!`);
             navigate("/dj");
         } catch (err) {
-            if (err.status === 429) {
+            if (err instanceof ApiError && err.status === 429) {
                 error =
                     "Too many login attempts. Please wait a few minutes before trying again.";
-            } else if (err.status === 401) {
+            } else if (err instanceof ApiError && err.status === 401) {
                 error = "Invalid username or password.";
             } else {
-                error = err.message || "Login failed. Please try again.";
+                error = err instanceof Error ? err instanceof Error ? err.message : String(err) : "Login failed. Please try again.";
             }
         } finally {
             loading = false;
         }
     }
 
-    function handleKeydown(e) {
+    function handleKeydown(e: KeyboardEvent) {
         if (e.key === "Enter") {
             handleSubmit();
         }

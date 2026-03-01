@@ -1,9 +1,9 @@
-<script>
+<script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import anime from 'animejs';
+  import type { TrackItem } from '../lib/api';
 
-  /** @type {Array<{id: number, title: string, artist?: string, album?: string, genre?: string, format?: string, duration?: number, filePath: string, checksum: string}>} */
-  export let tracks = [];
+  export let tracks: TrackItem[] = [];
 
   /** Whether to show management actions (drag handle, remove) */
   export let editable = false;
@@ -32,27 +32,26 @@
   let dragSourceIndex = -1;
   let dropTargetIndex = -1;
   let isDragging = false;
-  let listContainer;
+  let listContainer: HTMLDivElement | undefined;
 
-  /** @type {Map<number, HTMLElement>} track id -> row element */
-  let rowElements = new Map();
+  let rowElements = new Map<number, HTMLElement>();
 
-  function handleRemove(track, index) {
+  function handleRemove(track: TrackItem, index: number): void {
     dispatch('remove', { track, index });
   }
 
-  function handleSelect(track, index) {
+  function handleSelect(track: TrackItem, index: number): void {
     dispatch('select', { track, index });
   }
 
-  function formatDuration(seconds) {
+  function formatDuration(seconds: number | undefined): string {
     if (!seconds || seconds <= 0) return '';
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     return `${m}:${s.toString().padStart(2, '0')}`;
   }
 
-  function shortenPath(filePath) {
+  function shortenPath(filePath: string | undefined): string {
     if (!filePath) return '';
     const parts = filePath.replace(/\\/g, '/').split('/');
     if (parts.length <= 2) return filePath;
@@ -63,17 +62,17 @@
   // Drag & drop handlers
   // ---------------------------------------------------------------------------
 
-  function onDragStart(e, index) {
+  function onDragStart(e: DragEvent, index: number): void {
     dragSourceIndex = index;
     isDragging = true;
     dropTargetIndex = index;
 
     // Set drag data
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', String(index));
+    e.dataTransfer!.effectAllowed = 'move';
+    e.dataTransfer!.setData('text/plain', String(index));
 
     // Style the dragged element
-    const row = e.currentTarget;
+    const row = e.currentTarget as HTMLElement;
     requestAnimationFrame(() => {
       row.classList.add('tracklist-dragging');
     });
@@ -88,8 +87,8 @@
     });
   }
 
-  function onDragEnd(e) {
-    const row = e.currentTarget;
+  function onDragEnd(e: DragEvent): void {
+    const row = e.currentTarget as HTMLElement;
     row.classList.remove('tracklist-dragging');
 
     // Animate back to normal
@@ -114,9 +113,9 @@
     isDragging = false;
   }
 
-  function onDragOver(e, index) {
+  function onDragOver(e: DragEvent, index: number): void {
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
+    e.dataTransfer!.dropEffect = 'move';
 
     if (index === dragSourceIndex) {
       if (dropTargetIndex !== dragSourceIndex) {
@@ -132,11 +131,11 @@
     }
   }
 
-  function onDragEnter(e, index) {
+  function onDragEnter(e: DragEvent, _index: number): void {
     e.preventDefault();
   }
 
-  function onDrop(e, index) {
+  function onDrop(e: DragEvent, index: number): void {
     e.preventDefault();
     // The move is handled in onDragEnd
     dropTargetIndex = index;
@@ -146,9 +145,9 @@
   // Gap animation using anime.js
   // ---------------------------------------------------------------------------
 
-  let currentGapAnimation = null;
+  let currentGapAnimation: anime.AnimeTimelineInstance | null = null;
 
-  function animateGaps(targetIndex) {
+  function animateGaps(targetIndex: number): void {
     if (!listContainer) return;
 
     const rows = listContainer.querySelectorAll('.tracklist-row');
@@ -159,8 +158,8 @@
       currentGapAnimation.pause();
     }
 
-    const targets = [];
-    const marginValues = [];
+    const targets: Element[] = [];
+    const marginValues: { marginTop: string; marginBottom: string }[] = [];
 
     rows.forEach((row, i) => {
       if (i === dragSourceIndex) {
@@ -190,7 +189,7 @@
     });
 
     // Animate each row individually
-    const animations = targets.map((el, i) => {
+    const _animations = targets.map((el, i) => {
       return anime({
         targets: el,
         marginTop: marginValues[i].marginTop,
@@ -216,7 +215,7 @@
     currentGapAnimation = timeline;
   }
 
-  function clearAllGaps() {
+  function clearAllGaps(): void {
     if (!listContainer) return;
     if (currentGapAnimation) {
       currentGapAnimation.pause();
@@ -284,15 +283,17 @@
         {#if editable}
           <div class="px-2 {compact ? 'py-1.5' : 'py-3'} flex items-center justify-center gap-1">
             <!-- Drag handle -->
-            <div
+            <button
+              type="button"
               class="cursor-grab active:cursor-grabbing p-1 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
               title="Drag to reorder"
+              aria-label="Drag to reorder"
               on:mousedown|stopPropagation
             >
               <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
               </svg>
-            </div>
+            </button>
 
             <!-- Remove -->
             <button
@@ -331,8 +332,8 @@
             </p>
           {/if}
           {#if compact}
-            <p class="text-xs text-gray-400 dark:text-gray-600 truncate mt-0.5" title={track.filePath}>
-              {shortenPath(track.filePath)}
+            <p class="text-xs text-gray-400 dark:text-gray-600 truncate mt-0.5" title={track.file_path}>
+              {shortenPath(track.file_path)}
             </p>
           {/if}
         </div>
@@ -393,7 +394,7 @@
 {/if}
 
 <style>
-  .tracklist-dragging {
+  :global(.tracklist-dragging) {
     z-index: 50;
     position: relative;
     border-radius: 0.5rem;

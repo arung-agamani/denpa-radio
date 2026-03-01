@@ -1,8 +1,9 @@
-<script>
+<script lang="ts">
+  import type { Toast as ToastItem } from '../lib/stores';
   import { createEventDispatcher } from 'svelte';
   import { fade, fly } from 'svelte/transition';
 
-  export let toast;
+  export let toast: ToastItem;
 
   const dispatch = createEventDispatcher();
 
@@ -27,7 +28,7 @@
     info: 'bg-blue-200 text-blue-600 dark:bg-blue-700 dark:text-blue-200',
   };
 
-  $: type = toast.type || 'info';
+  $: type = (toast.type || 'info') as ToastItem['type'];
   $: colorClass = colors[type] || colors.info;
   $: iconBgClass = iconBg[type] || iconBg.info;
   $: icon = icons[type] || icons.info;

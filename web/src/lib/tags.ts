@@ -1,20 +1,22 @@
 // Shared tag constants used across DJ panel sections.
 
-export const tagEmoji = {
+export type TagKey = "morning" | "afternoon" | "evening" | "night";
+
+export const tagEmoji: Record<string, string> = {
     morning: "🌅",
     afternoon: "☀️",
     evening: "🌇",
     night: "🌙",
 };
 
-export const tagLabel = {
+export const tagLabel: Record<string, string> = {
     morning: "Morning",
     afternoon: "Afternoon",
     evening: "Evening",
     night: "Night",
 };
 
-export const tagColors = {
+export const tagColors: Record<string, string> = {
     morning:
         "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 border-amber-200 dark:border-amber-800",
     afternoon:

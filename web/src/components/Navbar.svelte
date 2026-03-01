@@ -1,7 +1,7 @@
-<script>
-  import { path, navigate } from '../lib/router.js';
-  import { auth, isAuthenticated } from '../lib/auth.js';
-  import { stationName, activeClients } from '../lib/stores.js';
+<script lang="ts">
+  import { path, navigate } from '../lib/router';
+  import { auth, isAuthenticated } from '../lib/auth';
+  import { stationName, activeClients } from '../lib/stores';
 
   let mobileMenuOpen = false;
 
@@ -9,7 +9,7 @@
     mobileMenuOpen = !mobileMenuOpen;
   }
 
-  function go(to) {
+  function go(to: string) {
     navigate(to);
     mobileMenuOpen = false;
   }

@@ -1,7 +1,7 @@
-<script>
-    import { exportPlaylist, importPlaylist } from "../../lib/api.js";
-    import { playlists, master, toasts } from "../../lib/stores.js";
-    import { tagEmoji } from "../../lib/tags.js";
+<script lang="ts">
+    import { exportPlaylist, importPlaylist } from "../../lib/api";
+    import { playlists, master, toasts } from "../../lib/stores";
+    import { tagEmoji } from "../../lib/tags";
 
     // ---------------------------------------------------------------------------
     // Import state
@@ -10,7 +10,7 @@
     let importText = "";
     let importing = false;
 
-    async function handleExport(id) {
+    async function handleExport(id: number): Promise<void> {
         try {
             const { blob, filename } = await exportPlaylist(id);
             const url = URL.createObjectURL(blob);
@@ -23,7 +23,7 @@
             URL.revokeObjectURL(url);
             toasts.success("Playlist exported!");
         } catch (err) {
-            toasts.error("Export failed: " + err.message);
+            toasts.error("Export failed: " + (err instanceof Error ? err.message : String(err)));
         }
     }
 
@@ -40,14 +40,14 @@
             await playlists.refresh();
             await master.refresh();
         } catch (err) {
-            toasts.error("Import failed: " + err.message);
+            toasts.error("Import failed: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             importing = false;
         }
     }
 
-    async function handleImportFile(e) {
-        const file = e.target.files?.[0];
+    async function handleImportFile(e: Event): Promise<void> {
+        const file = (e.target as HTMLInputElement).files?.[0];
         if (!file) return;
         const text = await file.text();
         importText = text;

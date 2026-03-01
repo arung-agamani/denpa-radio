@@ -1,14 +1,14 @@
-<script>
-  import { currentTrack, currentTrackInfo, activeTag, activePlaylist, status } from '../lib/stores.js';
+<script lang="ts">
+  import { currentTrack, currentTrackInfo, activeTag, activePlaylist, status } from '../lib/stores';
 
-  const tagEmoji = {
+  const tagEmoji: Record<string, string> = {
     morning: '🌅',
     afternoon: '☀️',
     evening: '🌇',
     night: '🌙',
   };
 
-  const tagLabel = {
+  const tagLabel: Record<string, string> = {
     morning: 'Morning',
     afternoon: 'Afternoon',
     evening: 'Evening',
@@ -20,7 +20,7 @@
   $: playlist = $activePlaylist;
   $: trackName = $currentTrack;
   $: isIdle = !trackName || trackName === 'none';
-  $: summary = $status.playlist_summary || {};
+  $: summary = ($status.playlist_summary || {}) as Record<string, number>;
   $: totalTracks = $status.total_tracks || 0;
 </script>
 

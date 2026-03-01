@@ -1,10 +1,10 @@
-<script>
-  import { isPlaying } from '../lib/stores.js';
+<script lang="ts">
+  import { isPlaying } from '../lib/stores';
 
-  let audioEl;
+  let audioEl: HTMLAudioElement | undefined;
   let volume = 0.8;
   let loading = false;
-  let error = null;
+  let error: string | null = null;
 
   const streamUrl = '/stream';
 
@@ -25,7 +25,7 @@
           $isPlaying = true;
           loading = false;
         })
-        .catch((err) => {
+        .catch((err: Error) => {
           // Ignore AbortError which happens when the user stops quickly.
           if (err.name !== 'AbortError') {
             error = 'Could not start playback. Please try again.';
@@ -55,8 +55,8 @@
     }
   }
 
-  function handleVolumeChange(e) {
-    volume = parseFloat(e.target.value);
+  function handleVolumeChange(e: Event) {
+    volume = parseFloat((e.target as HTMLInputElement).value);
     if (audioEl) {
       audioEl.volume = volume;
     }

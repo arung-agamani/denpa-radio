@@ -1,10 +1,11 @@
-<script>
-    import { status, playlists, master, scheduler, timezone } from "../../lib/stores.js";
-    import { navigate } from "../../lib/router.js";
-    import { reconcile, setTimezone, skipNext, skipPrev } from "../../lib/api.js";
-    import { toasts } from "../../lib/stores.js";
+<script lang="ts">
+    import type { ReconcileResult } from "../../lib/api";
+    import { status, playlists, master, scheduler, timezone } from "../../lib/stores";
+    import { navigate } from "../../lib/router";
+    import { reconcile, setTimezone, skipNext, skipPrev } from "../../lib/api";
+    import { toasts } from "../../lib/stores";
     import NowPlaying from "../../components/NowPlaying.svelte";
-    import { tagEmoji, tagLabel, tagColors } from "../../lib/tags.js";
+    import { tagEmoji, tagLabel, tagColors } from "../../lib/tags";
     import { onMount } from "svelte";
 
     // ---------------------------------------------------------------------------
@@ -20,7 +21,7 @@
             toasts.success("Skipped to next track.");
             status.refresh();
         } catch (err) {
-            toasts.error("Skip failed: " + err.message);
+            toasts.error("Skip failed: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             skipping = false;
         }
@@ -33,7 +34,7 @@
             toasts.success("Jumped to previous track.");
             status.refresh();
         } catch (err) {
-            toasts.error("Skip failed: " + err.message);
+            toasts.error("Skip failed: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             skipping = false;
         }
@@ -44,7 +45,7 @@
     // ---------------------------------------------------------------------------
 
     let reconciling = false;
-    let reconcileResult = null;
+    let reconcileResult: ReconcileResult | null = null;
 
     async function handleReconcile() {
         reconciling = true;
@@ -58,7 +59,7 @@
             await playlists.refresh();
             await master.refresh();
         } catch (err) {
-            toasts.error("Reconcile failed: " + err.message);
+            toasts.error("Reconcile failed: " + (err instanceof Error ? err.message : String(err)));
         } finally {
             reconciling = false;
         }
@@ -136,7 +137,7 @@
             status.refresh();
             scheduler.refresh();
         } catch (err) {
-            toasts.error(`Failed to set timezone: ${err.message}`);
+            toasts.error(`Failed to set timezone(: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
             savingTimezone = false;
         }
