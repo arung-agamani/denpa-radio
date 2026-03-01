@@ -137,8 +137,9 @@ export async function updateTrack(id, updates) {
     return request("PUT", `/api/tracks/${id}`, updates);
 }
 
-export async function deleteTrack(id) {
-    return request("DELETE", `/api/tracks/${id}`);
+export async function deleteTrack(id, { deleteFromDisk = false } = {}) {
+    const qs = deleteFromDisk ? "?deleteFromDisk=true" : "";
+    return request("DELETE", `/api/tracks/${id}${qs}`);
 }
 
 export async function scanTracks() {
@@ -306,14 +307,17 @@ export async function reconcile() {
  * Upload one audio file to the server.
  *
  * @param {File} file - The File object to upload.
- * @param {{ onProgress?: (percent: number) => void, meta?: { title?: string, artist?: string, album?: string, genre?: string } }} [opts]
+ * @param {{ onProgress?: (percent: number) => void, meta?: { title?: string, artist?: string, album?: string, genre?: string }, optimize?: boolean }} [opts]
  * @returns {Promise<{ status: string, added: boolean, track: object }>}
  */
-export function uploadTrack(file, { onProgress, meta } = {}) {
+export function uploadTrack(file, { onProgress, meta, optimize = true } = {}) {
     return new Promise((resolve, reject) => {
         const token = getToken();
         const form = new FormData();
         form.append("file", file);
+
+        // Append the optimize flag (defaults to true).
+        form.append("optimize", optimize ? "true" : "false");
 
         // Append any provided metadata fields so the server can override
         // the embedded audio tags and derive the on-disk filename from the title.

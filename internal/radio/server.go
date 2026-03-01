@@ -143,7 +143,7 @@ func NewServer(cfg *config.Config) *Server {
 	}, 1*time.Minute)
 
 	// --- Services ---
-	trackSvc := service.NewTrackService(master, store, cfg)
+	trackSvc := service.NewTrackService(master, store, cfg, encoder)
 	playlistSvc := service.NewPlaylistService(master, store, cfg)
 	masterSvc := service.NewMasterService(master, store, scheduler)
 	radioSvc := service.NewRadioService(master, store, scheduler, broadcaster, cfg)

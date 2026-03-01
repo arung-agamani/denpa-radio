@@ -100,13 +100,17 @@ func (h *TrackHandlers) Update(c *gin.Context) {
 }
 
 // Delete handles DELETE /api/tracks/:id  (protected)
+//
+// Query parameters:
+//   - deleteFromDisk=true  also remove the audio file from the filesystem.
 func (h *TrackHandlers) Delete(c *gin.Context) {
 	id, err := parseID(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "invalid track ID"})
 		return
 	}
-	playlistRemovals, err := h.svc.Delete(id)
+	deleteFromDisk := c.Query("deleteFromDisk") == "true"
+	playlistRemovals, err := h.svc.Delete(id, deleteFromDisk)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if isNotFound(err) {
@@ -119,6 +123,7 @@ func (h *TrackHandlers) Delete(c *gin.Context) {
 		"status":            "ok",
 		"message":           gin.H{"id": id, "playlist_removals": playlistRemovals},
 		"playlist_removals": playlistRemovals,
+		"file_deleted":      deleteFromDisk,
 	})
 }
 
@@ -194,10 +199,11 @@ func (h *TrackHandlers) Upload(c *gin.Context) {
 	)
 
 	meta := service.UploadMeta{
-		Title:  strings.TrimSpace(c.PostForm("title")),
-		Artist: strings.TrimSpace(c.PostForm("artist")),
-		Album:  strings.TrimSpace(c.PostForm("album")),
-		Genre:  strings.TrimSpace(c.PostForm("genre")),
+		Title:    strings.TrimSpace(c.PostForm("title")),
+		Artist:   strings.TrimSpace(c.PostForm("artist")),
+		Album:    strings.TrimSpace(c.PostForm("album")),
+		Genre:    strings.TrimSpace(c.PostForm("genre")),
+		Optimize: c.DefaultPostForm("optimize", "true") == "true",
 	}
 
 	result, err := h.svc.Upload(fileHeader.Filename, f, meta)

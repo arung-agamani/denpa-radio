@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -9,18 +10,20 @@ import (
 	"strings"
 
 	"github.com/arung-agamani/denpa-radio/config"
+	"github.com/arung-agamani/denpa-radio/internal/ffmpeg"
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
 )
 
 // TrackService implements the business logic for track library operations.
 type TrackService struct {
-	master *playlist.MasterPlaylist
-	store  *playlist.Store
-	cfg    *config.Config
+	master  *playlist.MasterPlaylist
+	store   *playlist.Store
+	cfg     *config.Config
+	encoder *ffmpeg.Encoder
 }
 
-func NewTrackService(master *playlist.MasterPlaylist, store *playlist.Store, cfg *config.Config) *TrackService {
-	return &TrackService{master: master, store: store, cfg: cfg}
+func NewTrackService(master *playlist.MasterPlaylist, store *playlist.Store, cfg *config.Config, encoder *ffmpeg.Encoder) *TrackService {
+	return &TrackService{master: master, store: store, cfg: cfg, encoder: encoder}
 }
 
 func (s *TrackService) save() {
@@ -81,8 +84,9 @@ func (s *TrackService) Update(id int64, upd playlist.TrackUpdate) (*playlist.Tra
 }
 
 // Delete removes a track from the library and every playlist it appears in.
+// When deleteFromDisk is true the underlying audio file is also removed.
 // Returns the number of playlist positions that were removed.
-func (s *TrackService) Delete(id int64) (playlistRemovals int, err error) {
+func (s *TrackService) Delete(id int64, deleteFromDisk bool) (playlistRemovals int, err error) {
 	if s.master.Library == nil {
 		return 0, fmt.Errorf("track library not initialised")
 	}
@@ -90,12 +94,29 @@ func (s *TrackService) Delete(id int64) (playlistRemovals int, err error) {
 	if track == nil {
 		return 0, fmt.Errorf("track %d not found in library", id)
 	}
+
+	filePath := track.FilePath
+
 	playlistRemovals = s.master.RemoveTrackFromAll(track.Checksum)
 	s.master.Library.RemoveByID(id)
+
+	var fileDeleted bool
+	if deleteFromDisk && filePath != "" {
+		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+			slog.Warn("Failed to delete track file from disk",
+				"path", filePath,
+				"error", err,
+			)
+		} else {
+			fileDeleted = true
+		}
+	}
+
 	slog.Info("Track deleted from library",
 		"track_id", id,
 		"title", track.Title,
 		"playlist_removals", playlistRemovals,
+		"file_deleted", fileDeleted,
 	)
 	s.save()
 	return playlistRemovals, nil
@@ -132,10 +153,11 @@ type UploadResult struct {
 // UploadMeta holds optional metadata to apply to a freshly uploaded track.
 // Empty strings are ignored; the embedded file tags are used as the fallback.
 type UploadMeta struct {
-	Title  string
-	Artist string
-	Album  string
-	Genre  string
+	Title    string
+	Artist   string
+	Album    string
+	Genre    string
+	Optimize bool // when true, convert the uploaded file to OGG Vorbis
 }
 
 // sanitizeFilename replaces characters that are unsafe in cross-platform
@@ -233,6 +255,22 @@ func (s *TrackService) Upload(filename string, content io.Reader, meta UploadMet
 		return nil, fmt.Errorf("failed to finalise file write: %w", err)
 	}
 
+	// Optimise: convert to OGG Vorbis if requested and the source is not
+	// already in OGG format.
+	if meta.Optimize && s.encoder != nil && ext != ".ogg" {
+		// Derive a unique OGG destination to avoid overwriting existing files.
+		oggBaseName := strings.TrimSuffix(filepath.Base(dest), ext) + ".ogg"
+		oggDest := uniqueDestPath(absMusic, oggBaseName)
+		if err := s.encoder.ConvertToOGG(context.Background(), dest, oggDest); err != nil {
+			os.Remove(dest)
+			return nil, fmt.Errorf("OGG conversion failed: %w", err)
+		}
+		// Remove the original file after successful conversion.
+		os.Remove(dest)
+		dest = oggDest
+		slog.Info("Uploaded file converted to OGG", "output", filepath.Base(dest))
+	}
+
 	// Build track metadata from the newly written file.
 	track, err := playlist.NewTrackFromFile(dest)
 	if err != nil {
@@ -253,6 +291,31 @@ func (s *TrackService) Upload(filename string, content io.Reader, meta UploadMet
 	}
 	if meta.Genre != "" {
 		track.Genre = meta.Genre
+	}
+
+	// If no user-supplied title was provided but the file contains embedded
+	// metadata with a title, rename the on-disk file to match so the
+	// filename is human-friendly (e.g. "Beautiful Song.ogg" instead of
+	// "audio.ogg").
+	currentExt := filepath.Ext(dest)
+	currentStem := strings.TrimSuffix(filepath.Base(dest), currentExt)
+	if meta.Title == "" && track.Title != "" && track.Title != currentStem {
+		newBaseName := sanitizeFilename(track.Title) + currentExt
+		newDest := uniqueDestPath(absMusic, newBaseName)
+		if renameErr := os.Rename(dest, newDest); renameErr == nil {
+			slog.Info("Renamed uploaded file to match metadata title",
+				"old", filepath.Base(dest),
+				"new", filepath.Base(newDest),
+			)
+			dest = newDest
+			track.FilePath = dest
+		} else {
+			slog.Warn("Could not rename file to metadata title",
+				"old", filepath.Base(dest),
+				"target", newBaseName,
+				"error", renameErr,
+			)
+		}
 	}
 
 	canonical, added := s.master.Library.Add(track)

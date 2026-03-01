@@ -17,6 +17,7 @@
     "vite": "^5.3.1"
   },
   "dependencies": {
+    "animejs": "3.2.2",
     "flowbite": "^2.3.0",
     "flowbite-svelte": "^0.46.1",
     "flowbite-svelte-icons": "^1.6.1"

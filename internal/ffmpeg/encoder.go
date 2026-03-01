@@ -1,6 +1,7 @@
 package ffmpeg
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -79,5 +80,47 @@ func (e *Encoder) Stream(ctx context.Context, inputFile string, output io.Writer
 		return fmt.Errorf("ffmpeg process error: %w", waitErr)
 	}
 
+	return nil
+}
+
+// ConvertToOGG converts an audio file to OGG Vorbis format. The output file
+// is written to outputFile. The conversion uses the encoder's configured
+// bitrate, sample rate, and channel count. Metadata from the source file is
+// preserved automatically by ffmpeg.
+func (e *Encoder) ConvertToOGG(ctx context.Context, inputFile, outputFile string) error {
+	args := []string{
+		"-y",            // Overwrite output without asking
+		"-i", inputFile, // Input file
+		"-vn",               // No video
+		"-c:a", "libvorbis", // OGG Vorbis codec
+		"-b:a", e.bitrate, // Audio bitrate
+		"-ac", e.channels, // Audio channels
+		"-ar", e.sampleRate, // Sample rate
+		"-map_metadata", "0", // Preserve metadata from input
+		outputFile,
+	}
+
+	slog.Info("Converting audio to OGG",
+		"input", inputFile,
+		"output", outputFile,
+		"bitrate", e.bitrate,
+	)
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+
+	if err := cmd.Run(); err != nil {
+		slog.Error("ffmpeg OGG conversion failed",
+			"input", inputFile,
+			"output", outputFile,
+			"stderr", stderrBuf.String(),
+			"error", err,
+		)
+		return fmt.Errorf("ffmpeg OGG conversion failed: %w", err)
+	}
+
+	slog.Info("OGG conversion complete", "output", outputFile)
 	return nil
 }

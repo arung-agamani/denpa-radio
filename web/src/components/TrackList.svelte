@@ -1,10 +1,11 @@
 <script>
   import { createEventDispatcher } from 'svelte';
+  import anime from 'animejs';
 
   /** @type {Array<{id: number, title: string, artist?: string, album?: string, genre?: string, format?: string, duration?: number, filePath: string, checksum: string}>} */
   export let tracks = [];
 
-  /** Whether to show management actions (remove, move) */
+  /** Whether to show management actions (drag handle, remove) */
   export let editable = false;
 
   /** Whether to show the index/position column */
@@ -24,20 +25,20 @@
 
   const dispatch = createEventDispatcher();
 
+  // ---------------------------------------------------------------------------
+  // Drag and drop state
+  // ---------------------------------------------------------------------------
+
+  let dragSourceIndex = -1;
+  let dropTargetIndex = -1;
+  let isDragging = false;
+  let listContainer;
+
+  /** @type {Map<number, HTMLElement>} track id -> row element */
+  let rowElements = new Map();
+
   function handleRemove(track, index) {
     dispatch('remove', { track, index });
-  }
-
-  function handleMoveUp(track, index) {
-    if (index > 0) {
-      dispatch('move', { from: index, to: index - 1, track });
-    }
-  }
-
-  function handleMoveDown(track, index) {
-    if (index < tracks.length - 1) {
-      dispatch('move', { from: index, to: index + 1, track });
-    }
   }
 
   function handleSelect(track, index) {
@@ -57,6 +58,179 @@
     if (parts.length <= 2) return filePath;
     return '…/' + parts.slice(-2).join('/');
   }
+
+  // ---------------------------------------------------------------------------
+  // Drag & drop handlers
+  // ---------------------------------------------------------------------------
+
+  function onDragStart(e, index) {
+    dragSourceIndex = index;
+    isDragging = true;
+    dropTargetIndex = index;
+
+    // Set drag data
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(index));
+
+    // Style the dragged element
+    const row = e.currentTarget;
+    requestAnimationFrame(() => {
+      row.classList.add('tracklist-dragging');
+    });
+
+    // Animate lift effect
+    anime({
+      targets: row,
+      scale: [1, 1.02],
+      boxShadow: ['0 0 0 rgba(0,0,0,0)', '0 8px 25px rgba(0,0,0,0.15)'],
+      duration: 200,
+      easing: 'easeOutCubic',
+    });
+  }
+
+  function onDragEnd(e) {
+    const row = e.currentTarget;
+    row.classList.remove('tracklist-dragging');
+
+    // Animate back to normal
+    anime({
+      targets: row,
+      scale: 1,
+      boxShadow: '0 0 0 rgba(0,0,0,0)',
+      duration: 200,
+      easing: 'easeOutCubic',
+    });
+
+    // Perform the move if target changed
+    if (dragSourceIndex !== -1 && dropTargetIndex !== -1 && dragSourceIndex !== dropTargetIndex) {
+      dispatch('move', { from: dragSourceIndex, to: dropTargetIndex, track: tracks[dragSourceIndex] });
+    }
+
+    // Reset all gap animations
+    clearAllGaps();
+
+    dragSourceIndex = -1;
+    dropTargetIndex = -1;
+    isDragging = false;
+  }
+
+  function onDragOver(e, index) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    if (index === dragSourceIndex) {
+      if (dropTargetIndex !== dragSourceIndex) {
+        dropTargetIndex = dragSourceIndex;
+        animateGaps(dragSourceIndex);
+      }
+      return;
+    }
+
+    if (dropTargetIndex !== index) {
+      dropTargetIndex = index;
+      animateGaps(index);
+    }
+  }
+
+  function onDragEnter(e, index) {
+    e.preventDefault();
+  }
+
+  function onDrop(e, index) {
+    e.preventDefault();
+    // The move is handled in onDragEnd
+    dropTargetIndex = index;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Gap animation using anime.js
+  // ---------------------------------------------------------------------------
+
+  let currentGapAnimation = null;
+
+  function animateGaps(targetIndex) {
+    if (!listContainer) return;
+
+    const rows = listContainer.querySelectorAll('.tracklist-row');
+    if (!rows.length) return;
+
+    // Cancel previous animations
+    if (currentGapAnimation) {
+      currentGapAnimation.pause();
+    }
+
+    const targets = [];
+    const marginValues = [];
+
+    rows.forEach((row, i) => {
+      if (i === dragSourceIndex) {
+        // The source row is being dragged, collapse its space
+        targets.push(row);
+        marginValues.push({ marginTop: '0px', marginBottom: '0px' });
+        return;
+      }
+
+      let mt = '0px';
+      let mb = '0px';
+
+      if (targetIndex <= dragSourceIndex) {
+        // Dragging upward: gap opens above the target
+        if (i === targetIndex) {
+          mt = '44px';
+        }
+      } else {
+        // Dragging downward: gap opens below the target
+        if (i === targetIndex) {
+          mb = '44px';
+        }
+      }
+
+      targets.push(row);
+      marginValues.push({ marginTop: mt, marginBottom: mb });
+    });
+
+    // Animate each row individually
+    const animations = targets.map((el, i) => {
+      return anime({
+        targets: el,
+        marginTop: marginValues[i].marginTop,
+        marginBottom: marginValues[i].marginBottom,
+        duration: 250,
+        easing: 'easeOutCubic',
+        autoplay: false,
+      });
+    });
+
+    // Play all
+    const timeline = anime.timeline({ autoplay: true });
+    targets.forEach((el, i) => {
+      timeline.add({
+        targets: el,
+        marginTop: marginValues[i].marginTop,
+        marginBottom: marginValues[i].marginBottom,
+        duration: 250,
+        easing: 'easeOutCubic',
+      }, 0);
+    });
+
+    currentGapAnimation = timeline;
+  }
+
+  function clearAllGaps() {
+    if (!listContainer) return;
+    if (currentGapAnimation) {
+      currentGapAnimation.pause();
+      currentGapAnimation = null;
+    }
+    const rows = listContainer.querySelectorAll('.tracklist-row');
+    anime({
+      targets: rows,
+      marginTop: '0px',
+      marginBottom: '0px',
+      duration: 200,
+      easing: 'easeOutCubic',
+    });
+  }
 </script>
 
 {#if tracks.length === 0}
@@ -67,150 +241,136 @@
     <p class="text-sm font-medium">{emptyMessage}</p>
   </div>
 {:else}
-  <div class="overflow-x-auto">
-    <table class="w-full text-left">
-      <thead>
-        <tr class="border-b border-gray-200 dark:border-gray-700 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-          {#if editable}
-            <th class="px-3 {compact ? 'py-2' : 'py-3'} w-28 text-center">Actions</th>
+  <div class="overflow-x-auto" bind:this={listContainer}>
+    <!-- Header row -->
+    <div class="tracklist-header grid border-b border-gray-200 dark:border-gray-700 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400"
+         style="grid-template-columns: {editable ? '3rem ' : ''}{showIndex ? '3rem ' : ''}1fr minmax(0, 12rem) minmax(0, 12rem){showFormat ? ' 5rem' : ''} 5rem;">
+      {#if editable}
+        <div class="px-2 {compact ? 'py-2' : 'py-3'} text-center"></div>
+      {/if}
+      {#if showIndex}
+        <div class="px-2 {compact ? 'py-2' : 'py-3'} text-center">#</div>
+      {/if}
+      <div class="px-3 {compact ? 'py-2' : 'py-3'}">Title</div>
+      <div class="px-3 {compact ? 'py-2' : 'py-3'} hidden sm:block">Artist</div>
+      <div class="px-3 {compact ? 'py-2' : 'py-3'} hidden md:block">Album</div>
+      {#if showFormat}
+        <div class="px-2 {compact ? 'py-2' : 'py-3'} hidden lg:block text-center">Format</div>
+      {/if}
+      <div class="px-3 {compact ? 'py-2' : 'py-3'} hidden lg:block text-right">Duration</div>
+    </div>
+
+    <!-- Rows -->
+    {#each tracks as track, index (track.id || track.checksum || index)}
+      {@const isHighlighted = highlightChecksum && track.checksum === highlightChecksum}
+      <div
+        class="tracklist-row grid items-center border-b border-gray-100 dark:border-gray-800 transition-colors relative
+          {isHighlighted
+            ? 'bg-primary-50 dark:bg-primary-900/20 border-l-2 border-l-primary-500'
+            : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'}
+          {isDragging && index === dragSourceIndex ? 'opacity-40' : ''}"
+        style="grid-template-columns: {editable ? '3rem ' : ''}{showIndex ? '3rem ' : ''}1fr minmax(0, 12rem) minmax(0, 12rem){showFormat ? ' 5rem' : ''} 5rem;"
+        draggable={editable}
+        on:dragstart={(e) => editable && onDragStart(e, index)}
+        on:dragend={(e) => editable && onDragEnd(e)}
+        on:dragover={(e) => editable && onDragOver(e, index)}
+        on:dragenter={(e) => editable && onDragEnter(e, index)}
+        on:drop={(e) => editable && onDrop(e, index)}
+        on:click={() => handleSelect(track, index)}
+        role="button"
+        tabindex="0"
+        on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelect(track, index); } }}
+      >
+        {#if editable}
+          <div class="px-2 {compact ? 'py-1.5' : 'py-3'} flex items-center justify-center gap-1">
+            <!-- Drag handle -->
+            <div
+              class="cursor-grab active:cursor-grabbing p-1 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              title="Drag to reorder"
+              on:mousedown|stopPropagation
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+              </svg>
+            </div>
+
+            <!-- Remove -->
+            <button
+              type="button"
+              class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+              title="Remove from playlist"
+              on:click|stopPropagation={() => handleRemove(track, index)}
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        {/if}
+
+        {#if showIndex}
+          <div class="px-2 {compact ? 'py-1.5' : 'py-3'} text-center">
+            <span class="text-xs font-mono text-gray-400 dark:text-gray-500 {isHighlighted ? 'text-primary-500 dark:text-primary-400 font-semibold' : ''}">
+              {#if isHighlighted}
+                <span class="inline-block animate-pulse">▶</span>
+              {:else}
+                {index + 1}
+              {/if}
+            </span>
+          </div>
+        {/if}
+
+        <div class="px-3 {compact ? 'py-1.5' : 'py-3'} min-w-0">
+          <p class="text-sm font-medium text-gray-900 dark:text-white truncate {isHighlighted ? 'text-primary-700 dark:text-primary-300' : ''}"
+             title={track.title}>
+            {track.title || 'Untitled'}
+          </p>
+          {#if track.artist}
+            <p class="text-xs text-gray-500 dark:text-gray-400 truncate sm:hidden mt-0.5">
+              {track.artist}
+            </p>
           {/if}
-          {#if showIndex}
-            <th class="px-3 {compact ? 'py-2' : 'py-3'} w-12 text-center">#</th>
+          {#if compact}
+            <p class="text-xs text-gray-400 dark:text-gray-600 truncate mt-0.5" title={track.filePath}>
+              {shortenPath(track.filePath)}
+            </p>
           {/if}
-          <th class="px-3 {compact ? 'py-2' : 'py-3'}">Title</th>
-          <th class="px-3 {compact ? 'py-2' : 'py-3'} hidden sm:table-cell">Artist</th>
-          <th class="px-3 {compact ? 'py-2' : 'py-3'} hidden md:table-cell">Album</th>
-          {#if showFormat}
-            <th class="px-3 {compact ? 'py-2' : 'py-3'} hidden lg:table-cell w-20 text-center">Format</th>
-          {/if}
-          <th class="px-3 {compact ? 'py-2' : 'py-3'} hidden lg:table-cell w-20 text-right">Duration</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each tracks as track, index (track.id || track.checksum || index)}
-          {@const isHighlighted = highlightChecksum && track.checksum === highlightChecksum}
-          <tr
-            class="border-b border-gray-100 dark:border-gray-800 transition-colors
-              {isHighlighted
-                ? 'bg-primary-50 dark:bg-primary-900/20 border-l-2 border-l-primary-500'
-                : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'}"
-            on:click={() => handleSelect(track, index)}
-            role="button"
-            tabindex="0"
-            on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelect(track, index); } }}
-          >
-            {#if editable}
-              <td class="px-3 {compact ? 'py-1.5' : 'py-3'} text-center">
-                <div class="flex items-center justify-center gap-1">
-                  <!-- Move up -->
-                  <button
-                    type="button"
-                    class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                    title="Move up"
-                    disabled={index === 0}
-                    on:click|stopPropagation={() => handleMoveUp(track, index)}
-                  >
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
-                    </svg>
-                  </button>
+        </div>
 
-                  <!-- Move down -->
-                  <button
-                    type="button"
-                    class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                    title="Move down"
-                    disabled={index === tracks.length - 1}
-                    on:click|stopPropagation={() => handleMoveDown(track, index)}
-                  >
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                    </svg>
-                  </button>
+        <div class="px-3 {compact ? 'py-1.5' : 'py-3'} hidden sm:block min-w-0">
+          <span class="text-sm text-gray-600 dark:text-gray-300 truncate block" title={track.artist || ''}>
+            {track.artist || '—'}
+          </span>
+        </div>
 
-                  <!-- Remove -->
-                  <button
-                    type="button"
-                    class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
-                    title="Remove from playlist"
-                    on:click|stopPropagation={() => handleRemove(track, index)}
-                  >
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              </td>
-            {/if}
-            {#if showIndex}
-              <td class="px-3 {compact ? 'py-1.5' : 'py-3'} text-center">
-                <span class="text-xs font-mono text-gray-400 dark:text-gray-500 {isHighlighted ? 'text-primary-500 dark:text-primary-400 font-semibold' : ''}">
-                  {#if isHighlighted}
-                    <span class="inline-block animate-pulse">▶</span>
-                  {:else}
-                    {index + 1}
-                  {/if}
-                </span>
-              </td>
-            {/if}
+        <div class="px-3 {compact ? 'py-1.5' : 'py-3'} hidden md:block min-w-0">
+          <span class="text-sm text-gray-500 dark:text-gray-400 truncate block" title={track.album || ''}>
+            {track.album || '—'}
+          </span>
+        </div>
 
-            <td class="px-3 {compact ? 'py-1.5' : 'py-3'}">
-              <div class="min-w-0">
-                <p class="text-sm font-medium text-gray-900 dark:text-white truncate {isHighlighted ? 'text-primary-700 dark:text-primary-300' : ''}"
-                   title={track.title}>
-                  {track.title || 'Untitled'}
-                </p>
-                <!-- Show artist on mobile beneath title since the Artist column is hidden -->
-                {#if track.artist}
-                  <p class="text-xs text-gray-500 dark:text-gray-400 truncate sm:hidden mt-0.5">
-                    {track.artist}
-                  </p>
-                {/if}
-                <!-- Show file path hint on hover/compact -->
-                {#if compact}
-                  <p class="text-xs text-gray-400 dark:text-gray-600 truncate mt-0.5" title={track.filePath}>
-                    {shortenPath(track.filePath)}
-                  </p>
-                {/if}
-              </div>
-            </td>
-
-            <td class="px-3 {compact ? 'py-1.5' : 'py-3'} hidden sm:table-cell">
-              <span class="text-sm text-gray-600 dark:text-gray-300 truncate block max-w-[200px]" title={track.artist || ''}>
-                {track.artist || '—'}
+        {#if showFormat}
+          <div class="px-2 {compact ? 'py-1.5' : 'py-3'} hidden lg:block text-center">
+            {#if track.format}
+              <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium uppercase
+                {track.format === 'flac'
+                  ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+                  : track.format === 'mp3'
+                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
+                    : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'}">
+                {track.format}
               </span>
-            </td>
-
-            <td class="px-3 {compact ? 'py-1.5' : 'py-3'} hidden md:table-cell">
-              <span class="text-sm text-gray-500 dark:text-gray-400 truncate block max-w-[200px]" title={track.album || ''}>
-                {track.album || '—'}
-              </span>
-            </td>
-
-            {#if showFormat}
-              <td class="px-3 {compact ? 'py-1.5' : 'py-3'} hidden lg:table-cell text-center">
-                {#if track.format}
-                  <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium uppercase
-                    {track.format === 'flac'
-                      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
-                      : track.format === 'mp3'
-                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
-                        : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'}">
-                    {track.format}
-                  </span>
-                {/if}
-              </td>
             {/if}
+          </div>
+        {/if}
 
-            <td class="px-3 {compact ? 'py-1.5' : 'py-3'} hidden lg:table-cell text-right">
-              <span class="text-xs text-gray-500 dark:text-gray-400 font-mono tabular-nums">
-                {formatDuration(track.duration)}
-              </span>
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
+        <div class="px-3 {compact ? 'py-1.5' : 'py-3'} hidden lg:block text-right">
+          <span class="text-xs text-gray-500 dark:text-gray-400 font-mono tabular-nums">
+            {formatDuration(track.duration)}
+          </span>
+        </div>
+      </div>
+    {/each}
   </div>
 
   <!-- Summary footer -->
@@ -231,3 +391,21 @@
     {/if}
   </div>
 {/if}
+
+<style>
+  .tracklist-dragging {
+    z-index: 50;
+    position: relative;
+    border-radius: 0.5rem;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+  }
+
+  .tracklist-row {
+    will-change: margin-top, margin-bottom, transform;
+  }
+
+  /* Make dragged ghost image slightly transparent */
+  .tracklist-row:global(.tracklist-dragging) {
+    opacity: 0.85;
+  }
+</style>
