@@ -54,8 +54,14 @@
   // Registers OS-level playback actions (keyboard media keys, lock screen
   // controls on Android / macOS / Windows) and keeps the track metadata
   // in sync so the OS displays the current track title and artist.
+  //
+  // sessionAttached tracks whether this tab currently owns the OS media
+  // controls. The user can voluntarily detach (release) them without
+  // stopping audio, so that other tabs / apps can take over OS controls.
   // ------------------------------------------------------------------
-  function setupMediaSession() {
+  let sessionAttached = false;
+
+  function registerMediaSessionHandlers() {
     if (!('mediaSession' in navigator)) return;
 
     navigator.mediaSession.setActionHandler('play', () => {
@@ -67,6 +73,14 @@
     navigator.mediaSession.setActionHandler('stop', () => {
       stop();
     });
+  }
+
+  function unregisterMediaSessionHandlers() {
+    if (!('mediaSession' in navigator)) return;
+
+    navigator.mediaSession.setActionHandler('play', null);
+    navigator.mediaSession.setActionHandler('pause', null);
+    navigator.mediaSession.setActionHandler('stop', null);
   }
 
   function updateMediaSession() {
@@ -82,20 +96,53 @@
     });
 
     navigator.mediaSession.playbackState = 'playing';
+    sessionAttached = true;
   }
 
-  function clearMediaSession() {
+  function pauseMediaSession() {
     if (!('mediaSession' in navigator)) return;
-    navigator.mediaSession.playbackState = 'none';
+    // Keep the metadata intact and mark as paused so the OS retains the
+    // media controls widget (e.g. Windows system tray, macOS menu bar).
+    // Setting 'none' would dismiss the widget entirely, making it impossible
+    // to resume via keyboard / OS controls.
+    navigator.mediaSession.playbackState = 'paused';
   }
 
-  // Re-push track metadata to the OS whenever the current track changes.
-  $: if ($isPlaying && $currentTrackInfo !== null) {
+  // Detach: fully release the OS media session widget so other tabs / apps
+  // can take over OS controls. Audio continues playing uninterrupted.
+  function detachMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+
+    unregisterMediaSessionHandlers();
+    navigator.mediaSession.metadata = null;
+    navigator.mediaSession.playbackState = 'none';
+    sessionAttached = false;
+  }
+
+  // Re-attach: reclaim OS media controls for this tab while audio is playing.
+  function attachMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+
+    registerMediaSessionHandlers();
+    updateMediaSession();
+  }
+
+  function toggleMediaSession() {
+    if (sessionAttached) {
+      detachMediaSession();
+    } else {
+      attachMediaSession();
+    }
+  }
+
+  // Re-push track metadata to the OS whenever the current track changes,
+  // but only if this tab still owns the session.
+  $: if ($isPlaying && sessionAttached && $currentTrackInfo !== null) {
     updateMediaSession();
   }
 
   onMount(() => {
-    setupMediaSession();
+    registerMediaSessionHandlers();
   });
 
   // ------------------------------------------------------------------
@@ -117,7 +164,7 @@
         .then(() => {
           $isPlaying = true;
           loading = false;
-          updateMediaSession();
+          attachMediaSession();
         })
         .catch((err: Error) => {
           // Ignore AbortError which happens when the user stops quickly.
@@ -140,7 +187,9 @@
     $isPlaying = false;
     loading = false;
     error = null;
-    clearMediaSession();
+    // If session is attached, keep widget visible in paused state so the
+    // user can resume via OS controls. If already detached, leave it alone.
+    if (sessionAttached) pauseMediaSession();
   }
 
   function toggle() {
@@ -165,7 +214,7 @@
       loading = false;
     }
     clearStallTimer();
-    clearMediaSession();
+    if (sessionAttached) pauseMediaSession();
   }
 
   function handleWaiting() {
@@ -256,14 +305,45 @@
         {/if}
       </div>
 
-      <!-- Live indicator -->
+      <!-- Live indicator + OS controls detach toggle -->
       {#if $isPlaying}
-        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 text-xs font-bold uppercase tracking-wide">
-          <span class="relative flex h-2 w-2">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
-          </span>
-          Live
+        <div class="flex items-center gap-2">
+          <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 text-xs font-bold uppercase tracking-wide">
+            <span class="relative flex h-2 w-2">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+            </span>
+            Live
+          </div>
+
+          <!-- Detach / re-attach OS media session controls.
+               Detaching releases keyboard media keys and OS lock-screen
+               controls so other apps / tabs can claim them, while the
+               audio stream keeps playing uninterrupted. -->
+          <button
+            type="button"
+            on:click={toggleMediaSession}
+            aria-label={sessionAttached ? 'Detach OS media controls (audio keeps playing)' : 'Attach OS media controls'}
+            title={sessionAttached ? 'Detach OS media controls' : 'Attach OS media controls'}
+            class="w-7 h-7 rounded-full flex items-center justify-center transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary-400 {sessionAttached
+              ? 'text-primary-500 hover:text-primary-700 hover:bg-primary-50 dark:hover:bg-primary-900/30'
+              : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700'}"
+          >
+            {#if sessionAttached}
+              <!-- Link icon: OS controls active -->
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 0 1 0 5.656l-3 3a4 4 0 0 1-5.656-5.656l1.5-1.5" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10.172 13.828a4 4 0 0 1 0-5.656l3-3a4 4 0 0 1 5.656 5.656l-1.5 1.5" />
+              </svg>
+            {:else}
+              <!-- Unlink icon: OS controls detached -->
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 0 1 0 5.656l-3 3a4 4 0 0 1-5.656-5.656l1.5-1.5" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10.172 13.828a4 4 0 0 1 0-5.656l3-3a4 4 0 0 1 5.656 5.656l-1.5 1.5" />
+                <line x1="4" y1="4" x2="20" y2="20" stroke-linecap="round" />
+              </svg>
+            {/if}
+          </button>
         </div>
       {/if}
     </div>
