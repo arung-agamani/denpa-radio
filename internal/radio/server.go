@@ -222,6 +222,7 @@ func (s *Server) registerRoutes(engine *gin.Engine, authInstance *auth.Auth) {
 		api.GET("/timezone", s.radioH.GetTimezone)
 		api.GET("/master", s.masterH.Get)
 		api.GET("/queue", s.radioH.GetQueue)
+		api.GET("/timeslots", s.masterH.GetTimeSlots)
 
 		// Literal sub-paths registered before :id to avoid routing conflicts.
 		api.GET("/tracks/search", s.trackH.Search)
@@ -261,6 +262,9 @@ func (s *Server) registerRoutes(engine *gin.Engine, authInstance *auth.Auth) {
 		// Master playlist tag management
 		protected.PUT("/master/:tag", s.masterH.AssignPlaylistToTag)
 		protected.DELETE("/master/:tag/:playlistId", s.masterH.RemovePlaylistFromTag)
+
+		// Time slot configuration
+		protected.PUT("/timeslots", s.masterH.SetTimeSlots)
 
 		// Reconcile & timezone
 		protected.POST("/reconcile", s.radioH.Reconcile)

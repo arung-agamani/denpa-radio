@@ -7,7 +7,7 @@ import {
     getMasterPlaylist,
     getSchedulerStatus,
 } from "./api";
-import type { RadioStatus, Track, Playlist, MasterPlaylist, SchedulerStatus } from "./api";
+import type { RadioStatus, Track, Playlist, MasterPlaylist, SchedulerStatus, TimeSlot } from "./api";
 
 // ---------------------------------------------------------------------------
 // Radio status (polled periodically)
@@ -167,6 +167,12 @@ function createMasterStore(): MasterStore {
             evening: { playlists: [], count: 0 },
             night: { playlists: [], count: 0 },
         },
+        time_slots: [
+            { tag: "morning", label: "Morning", startHour: 6, endHour: 12 },
+            { tag: "afternoon", label: "Afternoon", startHour: 12, endHour: 18 },
+            { tag: "evening", label: "Evening", startHour: 18, endHour: 21 },
+            { tag: "night", label: "Night", startHour: 21, endHour: 6 },
+        ],
     });
 
     const loading = writable<boolean>(false);
@@ -278,6 +284,12 @@ function createToastStore(): ToastStore {
 }
 
 export const toasts = createToastStore();
+
+// ---------------------------------------------------------------------------
+// Time slots (derived from master playlist)
+// ---------------------------------------------------------------------------
+
+export const timeSlots = derived(master, ($m) => $m.time_slots || []);
 
 // ---------------------------------------------------------------------------
 // UI state

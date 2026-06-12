@@ -34,10 +34,20 @@ type storePlaylistV2 struct {
 	CurrentTrackChecksum string   `json:"currentTrackChecksum,omitempty"`
 }
 
-// storeDataV2 is the current on-disk format.
+// storeDataV2 is used to read legacy v2 files.
 type storeDataV2 struct {
 	Version   int                           `json:"version"`
 	Timezone  string                        `json:"timezone,omitempty"`
+	Library   *TrackLibrary                 `json:"library"`
+	Playlists map[string][]*storePlaylistV2 `json:"playlists"`
+}
+
+// storeDataV3 is the current on-disk format. It extends v2 with configurable
+// time slots.
+type storeDataV3 struct {
+	Version   int                           `json:"version"`
+	Timezone  string                        `json:"timezone,omitempty"`
+	TimeSlots []TimeSlot                    `json:"timeSlots"`
 	Library   *TrackLibrary                 `json:"library"`
 	Playlists map[string][]*storePlaylistV2 `json:"playlists"`
 }
@@ -82,19 +92,36 @@ func (s *Store) Save(master *MasterPlaylist) error {
 
 	master.mu.RLock()
 
-	data := storeDataV2{
-		Version:   2,
+	data := storeDataV3{
+		Version:   3,
 		Timezone:  master.Timezone(),
+		TimeSlots: master.timeSlots,
 		Library:   master.Library,
 		Playlists: make(map[string][]*storePlaylistV2),
 	}
 
-	for _, tag := range ValidTimeTags {
+	for _, tag := range master.configuredTagsUnsafe() {
 		pls := master.getPlaylistsUnsafe(tag)
 		storePls := make([]*storePlaylistV2, 0, len(pls))
 		for _, pl := range pls {
 			sp := playlistToStoreV2(pl)
 			storePls = append(storePls, sp)
+		}
+		data.Playlists[string(tag)] = storePls
+	}
+
+	// Also persist playlists assigned to tags not in the current slot config
+	// (they may have been orphaned by a time slot change).
+	for tag, pls := range master.playlists {
+		if _, exists := data.Playlists[string(tag)]; exists {
+			continue
+		}
+		if len(pls) == 0 {
+			continue
+		}
+		storePls := make([]*storePlaylistV2, 0, len(pls))
+		for _, pl := range pls {
+			storePls = append(storePls, playlistToStoreV2(pl))
 		}
 		data.Playlists[string(tag)] = storePls
 	}
@@ -176,17 +203,20 @@ func (s *Store) Load() (*MasterPlaylist, error) {
 	}
 	_ = json.Unmarshal(raw, &versionProbe)
 
+	if versionProbe.Version >= 3 {
+		return s.loadV3(raw)
+	}
 	if versionProbe.Version >= 2 {
 		return s.loadV2(raw)
 	}
 	return s.loadV1(raw)
 }
 
-// loadV2 handles the current format.
-func (s *Store) loadV2(raw []byte) (*MasterPlaylist, error) {
-	var data storeDataV2
+// loadV3 handles the current format with configurable time slots.
+func (s *Store) loadV3(raw []byte) (*MasterPlaylist, error) {
+	var data storeDataV3
 	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, fmt.Errorf("failed to parse v2 playlist file %q: %w", s.path, err)
+		return nil, fmt.Errorf("failed to parse v3 playlist file %q: %w", s.path, err)
 	}
 
 	lib := data.Library
@@ -203,28 +233,71 @@ func (s *Store) loadV2(raw []byte) (*MasterPlaylist, error) {
 		}
 	}
 
-	for _, tag := range ValidTimeTags {
-		storePls, ok := data.Playlists[string(tag)]
-		if !ok {
-			continue
+	// Restore time slots.
+	if len(data.TimeSlots) > 0 {
+		if err := master.SetTimeSlots(data.TimeSlots); err != nil {
+			slog.Warn("Ignoring invalid persisted time slots, using defaults", "error", err)
 		}
+	}
+
+	for tagStr, storePls := range data.Playlists {
+		tag := TimeTag(tagStr)
 		for _, sp := range storePls {
 			pl := storeV2ToPlaylist(sp, tag, lib)
 			master.setPlaylistsUnsafe(tag, append(master.getPlaylistsUnsafe(tag), pl))
 		}
 	}
 
-	// Sync the playlist ID counter.
 	syncPlaylistIDCounter(master)
 
-	slog.Info("Playlist loaded from disk (v2)",
+	slog.Info("Playlist loaded from disk (v3)",
+		"path", s.path,
+		"timezone", data.Timezone,
+		"time_slots", len(master.timeSlots),
+		"library_tracks", lib.Count(),
+	)
+
+	return master, nil
+}
+
+// loadV2 handles the legacy v2 format (no time slots).
+func (s *Store) loadV2(raw []byte) (*MasterPlaylist, error) {
+	var data storeDataV2
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, fmt.Errorf("failed to parse v2 playlist file %q: %w", s.path, err)
+	}
+
+	slog.Info("Migrating v2 playlist format to v3", "path", s.path)
+
+	lib := data.Library
+	if lib == nil {
+		lib = NewTrackLibrary()
+	}
+
+	master := NewMasterPlaylistWithLibrary(lib)
+
+	// Restore persisted timezone.
+	if data.Timezone != "" {
+		if err := master.SetTimezone(data.Timezone); err != nil {
+			slog.Warn("Ignoring invalid persisted timezone", "timezone", data.Timezone, "error", err)
+		}
+	}
+
+	// v2 used fixed tags; restore playlists from all keys in the map.
+	for tagStr, storePls := range data.Playlists {
+		tag := TimeTag(tagStr)
+		for _, sp := range storePls {
+			pl := storeV2ToPlaylist(sp, tag, lib)
+			master.setPlaylistsUnsafe(tag, append(master.getPlaylistsUnsafe(tag), pl))
+		}
+	}
+
+	syncPlaylistIDCounter(master)
+
+	slog.Info("Playlist loaded from disk (v2, migrated to v3)",
 		"path", s.path,
 		"timezone", data.Timezone,
 		"library_tracks", lib.Count(),
-		"morning", len(master.Morning),
-		"afternoon", len(master.Afternoon),
-		"evening", len(master.Evening),
-		"night", len(master.Night),
 	)
 
 	return master, nil
@@ -291,20 +364,16 @@ func (s *Store) loadV1(raw []byte) (*MasterPlaylist, error) {
 	restorePlaylistsV1(data.Evening, TagEvening, lib)
 	restorePlaylistsV1(data.Night, TagNight, lib)
 
-	master.Morning = nonNilPlaylists(data.Morning)
-	master.Afternoon = nonNilPlaylists(data.Afternoon)
-	master.Evening = nonNilPlaylists(data.Evening)
-	master.Night = nonNilPlaylists(data.Night)
+	master.setPlaylistsUnsafe(TagMorning, nonNilPlaylists(data.Morning))
+	master.setPlaylistsUnsafe(TagAfternoon, nonNilPlaylists(data.Afternoon))
+	master.setPlaylistsUnsafe(TagEvening, nonNilPlaylists(data.Evening))
+	master.setPlaylistsUnsafe(TagNight, nonNilPlaylists(data.Night))
 
 	// Sync the playlist ID counter.
 	syncPlaylistIDCounter(master)
 
 	slog.Info("Migration complete",
 		"library_tracks", lib.Count(),
-		"morning", len(master.Morning),
-		"afternoon", len(master.Afternoon),
-		"evening", len(master.Evening),
-		"night", len(master.Night),
 	)
 
 	return master, nil
@@ -338,8 +407,8 @@ func nonNilPlaylists(pls []*Playlist) []*Playlist {
 func syncPlaylistIDCounter(master *MasterPlaylist) {
 	var maxPlaylist int64
 
-	for _, tag := range ValidTimeTags {
-		for _, pl := range master.getPlaylistsUnsafe(tag) {
+	for _, pls := range master.playlists {
+		for _, pl := range pls {
 			if pl.ID > maxPlaylist {
 				maxPlaylist = pl.ID
 			}
@@ -463,18 +532,19 @@ func ImportPlaylistIntoLibrary(data []byte, lib *TrackLibrary) (*Playlist, error
 }
 
 // ExportMasterPlaylist serialises the entire MasterPlaylist to JSON bytes.
-// This uses the v2 format (library + checksum references).
+// This uses the v3 format (library + checksum references + time slots).
 func ExportMasterPlaylist(master *MasterPlaylist) ([]byte, error) {
 	master.mu.RLock()
 
-	data := storeDataV2{
-		Version:   2,
+	data := storeDataV3{
+		Version:   3,
 		Timezone:  master.Timezone(),
+		TimeSlots: master.timeSlots,
 		Library:   master.Library,
 		Playlists: make(map[string][]*storePlaylistV2),
 	}
 
-	for _, tag := range ValidTimeTags {
+	for _, tag := range master.configuredTagsUnsafe() {
 		pls := master.getPlaylistsUnsafe(tag)
 		storePls := make([]*storePlaylistV2, 0, len(pls))
 		for _, pl := range pls {
@@ -493,13 +563,44 @@ func ExportMasterPlaylist(master *MasterPlaylist) ([]byte, error) {
 }
 
 // ImportMasterPlaylist reads JSON bytes and returns a fully reconstructed
-// MasterPlaylist. Supports both v1 and v2 formats.
+// MasterPlaylist. Supports v1, v2, and v3 formats.
 func ImportMasterPlaylist(data []byte) (*MasterPlaylist, error) {
 	// Peek at the version.
 	var versionProbe struct {
 		Version int `json:"version"`
 	}
 	_ = json.Unmarshal(data, &versionProbe)
+
+	if versionProbe.Version >= 3 {
+		var sd storeDataV3
+		if err := json.Unmarshal(data, &sd); err != nil {
+			return nil, fmt.Errorf("failed to parse v3 master playlist data: %w", err)
+		}
+
+		lib := sd.Library
+		if lib == nil {
+			lib = NewTrackLibrary()
+		}
+
+		master := NewMasterPlaylistWithLibrary(lib)
+
+		if len(sd.TimeSlots) > 0 {
+			if err := master.SetTimeSlots(sd.TimeSlots); err != nil {
+				slog.Warn("Ignoring invalid time slots in import, using defaults", "error", err)
+			}
+		}
+
+		for tagStr, storePls := range sd.Playlists {
+			tag := TimeTag(tagStr)
+			for _, sp := range storePls {
+				pl := storeV2ToPlaylist(sp, tag, lib)
+				master.setPlaylistsUnsafe(tag, append(master.getPlaylistsUnsafe(tag), pl))
+			}
+		}
+
+		syncPlaylistIDCounter(master)
+		return master, nil
+	}
 
 	if versionProbe.Version >= 2 {
 		var sd storeDataV2
@@ -514,11 +615,8 @@ func ImportMasterPlaylist(data []byte) (*MasterPlaylist, error) {
 
 		master := NewMasterPlaylistWithLibrary(lib)
 
-		for _, tag := range ValidTimeTags {
-			storePls, ok := sd.Playlists[string(tag)]
-			if !ok {
-				continue
-			}
+		for tagStr, storePls := range sd.Playlists {
+			tag := TimeTag(tagStr)
 			for _, sp := range storePls {
 				pl := storeV2ToPlaylist(sp, tag, lib)
 				master.setPlaylistsUnsafe(tag, append(master.getPlaylistsUnsafe(tag), pl))
@@ -555,10 +653,10 @@ func ImportMasterPlaylist(data []byte) (*MasterPlaylist, error) {
 	restorePlaylistsV1(sd.Night, TagNight, lib)
 
 	master := NewMasterPlaylistWithLibrary(lib)
-	master.Morning = nonNilPlaylists(sd.Morning)
-	master.Afternoon = nonNilPlaylists(sd.Afternoon)
-	master.Evening = nonNilPlaylists(sd.Evening)
-	master.Night = nonNilPlaylists(sd.Night)
+	master.setPlaylistsUnsafe(TagMorning, nonNilPlaylists(sd.Morning))
+	master.setPlaylistsUnsafe(TagAfternoon, nonNilPlaylists(sd.Afternoon))
+	master.setPlaylistsUnsafe(TagEvening, nonNilPlaylists(sd.Evening))
+	master.setPlaylistsUnsafe(TagNight, nonNilPlaylists(sd.Night))
 
 	syncPlaylistIDCounter(master)
 	return master, nil

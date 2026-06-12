@@ -70,8 +70,8 @@ func (s *PlaylistService) Create(name, tag string) (*playlist.Playlist, error) {
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	if !playlist.IsValidTimeTag(tag) {
-		return nil, fmt.Errorf("invalid tag: must be one of morning, afternoon, evening, night")
+	if !s.master.IsConfiguredTag(playlist.TimeTag(tag)) {
+		return nil, fmt.Errorf("invalid tag: %s is not a configured time slot", tag)
 	}
 	t := playlist.TimeTag(tag)
 	pl := playlist.NewPlaylist(name, t)
@@ -94,8 +94,8 @@ func (s *PlaylistService) Update(id int64, name, tag *string) (*playlist.Playlis
 	}
 	if tag != nil && playlist.TimeTag(*tag) != currentTag {
 		newTag := playlist.TimeTag(*tag)
-		if !playlist.IsValidTimeTag(*tag) {
-			return nil, fmt.Errorf("invalid tag: must be one of morning, afternoon, evening, night")
+		if !s.master.IsConfiguredTag(newTag) {
+			return nil, fmt.Errorf("invalid tag: %s is not a configured time slot", *tag)
 		}
 		if err := s.master.RemovePlaylist(currentTag, id); err != nil {
 			return nil, err

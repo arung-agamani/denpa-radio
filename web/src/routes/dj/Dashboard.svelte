@@ -5,7 +5,8 @@
     import { reconcile, setTimezone, skipNext, skipPrev } from "../../lib/api";
     import { toasts } from "../../lib/stores";
     import NowPlaying from "../../components/NowPlaying.svelte";
-    import { tagEmoji, tagLabel, tagColors } from "../../lib/tags";
+    import { getTagEmoji, getTagLabel, getTagColor, formatHourRange } from "../../lib/tags";
+    import { timeSlots } from "../../lib/stores";
     import { onMount } from "svelte";
 
     // ---------------------------------------------------------------------------
@@ -225,8 +226,8 @@
             Active Tag
         </p>
         <p class="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-            <span>{tagEmoji[statusData.active_tag] || "🕐"}</span>
-            <span class="text-base">{tagLabel[statusData.active_tag] || statusData.active_tag || "—"}</span>
+            <span>{getTagEmoji(statusData.active_tag)}</span>
+            <span class="text-base">{getTagLabel(statusData.active_tag, $timeSlots) || statusData.active_tag || "—"}</span>
         </p>
     </div>
 </div>
@@ -245,18 +246,18 @@
     </div>
 
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {#each ["morning", "afternoon", "evening", "night"] as tag}
-            {@const count = (statusData.playlist_summary || {})[tag] || 0}
-            {@const isActive = statusData.active_tag === tag}
-            <div class="rounded-lg border p-3 {isActive ? 'ring-2 ring-primary-500 ' : ''}{tagColors[tag]}">
+        {#each $timeSlots as slot (slot.tag)}
+            {@const count = (statusData.playlist_summary || {})[slot.tag] || 0}
+            {@const isActive = statusData.active_tag === slot.tag}
+            <div class="rounded-lg border p-3 {isActive ? 'ring-2 ring-primary-500 ' : ''}{getTagColor(slot.tag, $timeSlots)}">
                 <div class="flex items-center gap-2 mb-1">
-                    <span class="text-lg">{tagEmoji[tag]}</span>
-                    <span class="text-sm font-semibold">{tagLabel[tag]}</span>
+                    <span class="text-lg">{getTagEmoji(slot.tag)}</span>
+                    <span class="text-sm font-semibold">{slot.label}</span>
                     {#if isActive}
                         <span class="ml-auto text-xs font-bold px-1.5 py-0.5 rounded-full bg-primary-200 dark:bg-primary-800 text-primary-700 dark:text-primary-300">ACTIVE</span>
                     {/if}
                 </div>
-                <p class="text-xs opacity-75">{count} playlist{count !== 1 ? "s" : ""}</p>
+                <p class="text-xs opacity-75">{count} playlist{count !== 1 ? "s" : ""} · {formatHourRange(slot.startHour, slot.endHour)}</p>
             </div>
         {/each}
     </div>
@@ -278,7 +279,7 @@
         </span>
     </div>
     <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">
-        Set the timezone used for time-based playlist scheduling (morning/afternoon/evening/night).
+        Set the timezone used for time-based playlist scheduling.
     </p>
     <div class="flex flex-col sm:flex-row gap-3">
         <select

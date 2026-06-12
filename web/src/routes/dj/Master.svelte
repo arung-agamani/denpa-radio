@@ -1,14 +1,21 @@
 <script lang="ts">
-    import { assignPlaylistToTag, removePlaylistFromTag } from "../../lib/api";
-    import { playlists, master, status, toasts } from "../../lib/stores";
-    import { tagEmoji, tagLabel, tagColors } from "../../lib/tags";
+    import { assignPlaylistToTag, removePlaylistFromTag, setTimeSlots } from "../../lib/api";
+    import type { TimeSlot } from "../../lib/api";
+    import { playlists, master, status, timeSlots, toasts } from "../../lib/stores";
+    import { getTagLabel, getTagEmoji, getTagColor, formatHourRange } from "../../lib/tags";
+    import TimeSlotEditor from "../../components/TimeSlotEditor.svelte";
 
     // ---------------------------------------------------------------------------
     // Assign form state
     // ---------------------------------------------------------------------------
 
-    let assignTag = "morning";
+    let assignTag = "";
     let assignPlaylistId: number | null = null;
+
+    // Default assignTag to the first configured slot.
+    $: if (!assignTag && $timeSlots.length > 0) {
+        assignTag = $timeSlots[0].tag;
+    }
 
     async function handleAssignToTag() {
         if (!assignPlaylistId) {
@@ -17,7 +24,7 @@
         }
         try {
             await assignPlaylistToTag(assignTag, assignPlaylistId);
-            toasts.success("Playlist assigned to " + tagLabel[assignTag] + "!");
+            toasts.success("Playlist assigned to " + getTagLabel(assignTag, $timeSlots) + "!");
             assignPlaylistId = null;
             await master.refresh();
             await playlists.refresh();
@@ -29,12 +36,42 @@
     async function handleRemoveFromTag(tag: string, playlistId: number): Promise<void> {
         try {
             await removePlaylistFromTag(tag, playlistId);
-            toasts.success("Playlist removed from " + tagLabel[tag]);
+            toasts.success("Playlist removed from " + getTagLabel(tag, $timeSlots));
             await master.refresh();
             await playlists.refresh();
         } catch (err) {
             toasts.error("Failed to remove: " + (err instanceof Error ? err.message : String(err)));
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Time slot editor
+    // ---------------------------------------------------------------------------
+
+    let showSlotEditor = false;
+    let savingSlots = false;
+
+    function openSlotEditor() {
+        showSlotEditor = true;
+    }
+
+    async function saveSlots(newSlots: TimeSlot[]) {
+        savingSlots = true;
+        try {
+            await setTimeSlots(newSlots);
+            toasts.success("Time slots updated!");
+            showSlotEditor = false;
+            await master.refresh();
+            await status.refresh();
+        } catch (err) {
+            toasts.error("Failed to save time slots: " + (err instanceof Error ? err.message : String(err)));
+        } finally {
+            savingSlots = false;
+        }
+    }
+
+    function cancelSlotEditor() {
+        showSlotEditor = false;
     }
 
     // ---------------------------------------------------------------------------
@@ -44,12 +81,49 @@
     $: allPlaylistsList = $playlists || [];
     $: masterData = $master;
     $: statusData = $status;
+    $: slots = $timeSlots;
 </script>
 
 <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Master Playlist</h1>
 <p class="text-sm text-gray-500 dark:text-gray-400 -mt-4">
     Assign playlists to time slots. The scheduler automatically switches to the matching slot throughout the day.
 </p>
+
+<!-- Time Slot Configuration -->
+<div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+    <div class="flex items-center justify-between mb-4">
+        <h3 class="text-base font-semibold text-gray-900 dark:text-white">Time Slot Schedule</h3>
+        {#if !showSlotEditor}
+            <button
+                type="button"
+                class="px-4 py-2 text-xs font-semibold text-primary-600 dark:text-primary-400 border border-primary-300 dark:border-primary-700 rounded-lg hover:bg-primary-50 dark:hover:bg-primary-900/30 transition-colors"
+                on:click={openSlotEditor}
+            >
+                Configure
+            </button>
+        {/if}
+    </div>
+
+    {#if showSlotEditor}
+        <!-- Visual editor component -->
+        <TimeSlotEditor
+            slots={$timeSlots}
+            saving={savingSlots}
+            on:save={(e) => saveSlots(e.detail)}
+            on:cancel={cancelSlotEditor}
+        />
+    {:else}
+        <!-- Read-only display -->
+        <div class="flex flex-wrap gap-2">
+            {#each slots as slot}
+                <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border {getTagColor(slot.tag, slots)}">
+                    {getTagEmoji(slot.tag)} {slot.label}
+                    <span class="opacity-60">({formatHourRange(slot.startHour, slot.endHour)})</span>
+                </span>
+            {/each}
+        </div>
+    {/if}
+</div>
 
 <!-- Assign form -->
 <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
@@ -59,16 +133,15 @@
             bind:value={assignTag}
             class="px-4 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
         >
-            <option value="morning">🌅 Morning (6am–12pm)</option>
-            <option value="afternoon">☀️ Afternoon (12pm–6pm)</option>
-            <option value="evening">🌇 Evening (6pm–9pm)</option>
-            <option value="night">🌙 Night (9pm–6am)</option>
+            {#each slots as slot}
+                <option value={slot.tag}>{getTagEmoji(slot.tag)} {slot.label} ({formatHourRange(slot.startHour, slot.endHour)})</option>
+            {/each}
         </select>
         <select
             bind:value={assignPlaylistId}
             class="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
         >
-            <option value={null}>Select a playlist…</option>
+            <option value={null}>Select a playlist...</option>
             {#each allPlaylistsList as pl}
                 <option value={pl.id}>{pl.name} ({pl.trackCount} tracks)</option>
             {/each}
@@ -86,7 +159,8 @@
 
 <!-- Time slots -->
 <div class="grid gap-4">
-    {#each ["morning", "afternoon", "evening", "night"] as tag}
+    {#each slots as slot (slot.tag)}
+        {@const tag = slot.tag}
         {@const tagData = (masterData.tags || {})[tag] || { playlists: [], count: 0 }}
         {@const isActive = (masterData.active_tag || statusData.active_tag) === tag}
         <div
@@ -96,10 +170,11 @@
         >
             <div class="px-5 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
                 <div class="flex items-center gap-3">
-                    <span class="text-2xl">{tagEmoji[tag]}</span>
+                    <span class="text-2xl">{getTagEmoji(tag)}</span>
                     <div>
                         <h3 class="text-base font-bold text-gray-900 dark:text-white">
-                            {tagLabel[tag]}
+                            {slot.label}
+                            <span class="ml-1 text-xs font-normal text-gray-400">({formatHourRange(slot.startHour, slot.endHour)})</span>
                             {#if isActive}
                                 <span class="ml-2 text-xs font-bold px-2 py-0.5 rounded-full bg-primary-100 dark:bg-primary-900/50 text-primary-700 dark:text-primary-300">ACTIVE</span>
                             {/if}
@@ -150,6 +225,6 @@
         class="px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2"
         on:click={() => { master.refresh(); status.refresh(); }}
     >
-        🔄 Refresh
+        Refresh
     </button>
 </div>

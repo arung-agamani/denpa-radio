@@ -13,8 +13,8 @@
         listTracks,
         listOrphanedTracks,
     } from "../../lib/api";
-    import { playlists, master, toasts } from "../../lib/stores";
-    import { tagEmoji, tagLabel, tagColors } from "../../lib/tags";
+    import { playlists, master, toasts, timeSlots } from "../../lib/stores";
+    import { getTagEmoji, getTagLabel, getTagColor } from "../../lib/tags";
     import TrackList from "../../components/TrackList.svelte";
 
     // ---------------------------------------------------------------------------
@@ -33,7 +33,8 @@
 
     // Create playlist form
     let newPlaylistName = "";
-    let newPlaylistTag = "morning";
+    let newPlaylistTag = "";
+    $: if (!newPlaylistTag && $timeSlots.length > 0) { newPlaylistTag = $timeSlots[0].tag; }
     let creatingPlaylist = false;
 
     // Edit playlist form
@@ -280,10 +281,9 @@
             bind:value={newPlaylistTag}
             class="px-4 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
         >
-            <option value="morning">🌅 Morning</option>
-            <option value="afternoon">☀️ Afternoon</option>
-            <option value="evening">🌇 Evening</option>
-            <option value="night">🌙 Night</option>
+            {#each $timeSlots as slot}
+                <option value={slot.tag}>{getTagEmoji(slot.tag)} {slot.label}</option>
+            {/each}
         </select>
         <button
             type="button"
@@ -320,15 +320,15 @@
             {#each allPlaylistsList as pl (pl.id)}
                 <div class="px-5 py-3 flex items-center gap-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group">
                     <div
-                        class="flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-lg {tagColors[pl.tag] || 'bg-gray-100 dark:bg-gray-700'}"
+                        class="flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-lg {getTagColor(pl.tag, $timeSlots) || 'bg-gray-100 dark:bg-gray-700'}"
                     >
-                        {tagEmoji[pl.tag] || "🎵"}
+                        {getTagEmoji(pl.tag)}
                     </div>
 
                     <div class="flex-1 min-w-0">
                         <p class="text-sm font-semibold text-gray-900 dark:text-white truncate">{pl.name}</p>
                         <p class="text-xs text-gray-500 dark:text-gray-400">
-                            {tagLabel[pl.tag] || pl.tag} · {pl.trackCount} track{pl.trackCount !== 1 ? "s" : ""}
+                            {getTagLabel(pl.tag, $timeSlots)} · {pl.trackCount} track{pl.trackCount !== 1 ? "s" : ""}
                         </p>
                     </div>
 
@@ -451,10 +451,9 @@
                             bind:value={editTag}
                             class="text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white px-2 py-1"
                         >
-                            <option value="morning">🌅 Morning</option>
-                            <option value="afternoon">☀️ Afternoon</option>
-                            <option value="evening">🌇 Evening</option>
-                            <option value="night">🌙 Night</option>
+                            {#each $timeSlots as slot}
+                                <option value={slot.tag}>{getTagEmoji(slot.tag)} {slot.label}</option>
+                            {/each}
                         </select>
                         <button
                             type="button"
@@ -473,10 +472,10 @@
                             </h3>
                             <div class="flex items-center gap-2 mt-0.5">
                                 <span
-                                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border {tagColors[selectedPlaylist.tag]}"
+                                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border {getTagColor(selectedPlaylist.tag, $timeSlots)}"
                                 >
-                                    {tagEmoji[selectedPlaylist.tag]}
-                                    {tagLabel[selectedPlaylist.tag]}
+                                    {getTagEmoji(selectedPlaylist.tag)}
+                                    {getTagLabel(selectedPlaylist.tag, $timeSlots)}
                                 </span>
                                 <span class="text-xs text-gray-400 dark:text-gray-500">ID: {selectedPlaylist.id}</span>
                             </div>

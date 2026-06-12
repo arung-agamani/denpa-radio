@@ -1,19 +1,6 @@
 <script lang="ts">
-  import { currentTrack, currentTrackInfo, activeTag, activePlaylist, status } from '../lib/stores';
-
-  const tagEmoji: Record<string, string> = {
-    morning: '🌅',
-    afternoon: '☀️',
-    evening: '🌇',
-    night: '🌙',
-  };
-
-  const tagLabel: Record<string, string> = {
-    morning: 'Morning',
-    afternoon: 'Afternoon',
-    evening: 'Evening',
-    night: 'Night',
-  };
+  import { currentTrack, currentTrackInfo, activeTag, activePlaylist, status, timeSlots } from '../lib/stores';
+  import { getTagEmoji, getTagLabel } from '../lib/tags';
 
   $: track = $currentTrackInfo;
   $: tag = $activeTag;
@@ -101,8 +88,8 @@
       <!-- Time tag badge -->
       {#if tag}
         <div class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
-          <span>{tagEmoji[tag] || '🕐'}</span>
-          <span>{tagLabel[tag] || tag}</span>
+          <span>{getTagEmoji(tag)}</span>
+          <span>{getTagLabel(tag, $timeSlots)}</span>
         </div>
       {/if}
 
@@ -146,18 +133,18 @@
     {#if Object.keys(summary).length > 0}
       <div class="mt-4 flex items-center gap-2">
         <span class="text-xs text-gray-400 dark:text-gray-500 mr-1">Schedule:</span>
-        {#each ['morning', 'afternoon', 'evening', 'night'] as slot}
-          {@const count = summary[slot] || 0}
+        {#each $timeSlots as slotDef (slotDef.tag)}
+          {@const count = summary[slotDef.tag] || 0}
           <div
             class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors
-              {tag === slot
+              {tag === slotDef.tag
                 ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 font-semibold ring-1 ring-primary-300 dark:ring-primary-700'
                 : count > 0
                   ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
                   : 'bg-gray-50 dark:bg-gray-800 text-gray-400 dark:text-gray-600'}"
-            title="{tagLabel[slot]}: {count} playlist{count !== 1 ? 's' : ''}{tag === slot ? ' (active)' : ''}"
+            title="{slotDef.label}: {count} playlist{count !== 1 ? 's' : ''}{tag === slotDef.tag ? ' (active)' : ''}"
           >
-            <span class="text-xs">{tagEmoji[slot]}</span>
+            <span class="text-xs">{getTagEmoji(slotDef.tag)}</span>
             <span>{count}</span>
           </div>
         {/each}

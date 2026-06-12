@@ -1,7 +1,7 @@
 <script lang="ts">
     import { exportPlaylist, importPlaylist } from "../../lib/api";
     import { playlists, master, toasts } from "../../lib/stores";
-    import { tagEmoji } from "../../lib/tags";
+    import { getTagEmoji } from "../../lib/tags";
 
     // ---------------------------------------------------------------------------
     // Import state
@@ -81,7 +81,7 @@
                     class="flex items-center gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-primary-300 dark:hover:border-primary-700 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors text-left"
                     on:click={() => handleExport(pl.id)}
                 >
-                    <span class="text-lg">{tagEmoji[pl.tag] || "🎵"}</span>
+                    <span class="text-lg">{getTagEmoji(pl.tag)}</span>
                     <div class="flex-1 min-w-0">
                         <p class="text-sm font-medium text-gray-900 dark:text-white truncate">{pl.name}</p>
                         <p class="text-xs text-gray-500 dark:text-gray-400">{pl.trackCount} tracks</p>

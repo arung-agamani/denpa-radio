@@ -11,12 +11,13 @@ import (
 // MasterPlaylist holds collections of playlists organised by time-of-day tags.
 // The radio service plays from the active playlist, which is determined by the
 // current time and the tag assignments.
+//
+// Time slots are configurable: each slot maps a tag name to an hour range.
+// Playlists are stored in a map keyed by tag.
 type MasterPlaylist struct {
 	mu        sync.RWMutex
-	Morning   []*Playlist `json:"morning"`
-	Afternoon []*Playlist `json:"afternoon"`
-	Evening   []*Playlist `json:"evening"`
-	Night     []*Playlist `json:"night"`
+	playlists map[TimeTag][]*Playlist
+	timeSlots []TimeSlot
 
 	// Library is the single source of truth for all track data. Every track
 	// referenced by any playlist must exist in this library.
@@ -36,14 +37,17 @@ type MasterPlaylist struct {
 	timezoneName string
 }
 
-// NewMasterPlaylist creates a new MasterPlaylist with empty slices for each
-// time tag and a fresh TrackLibrary.
+// NewMasterPlaylist creates a new MasterPlaylist with the default time slots
+// and a fresh TrackLibrary.
 func NewMasterPlaylist() *MasterPlaylist {
+	slots := DefaultTimeSlots()
+	pls := make(map[TimeTag][]*Playlist)
+	for _, s := range slots {
+		pls[s.Tag] = make([]*Playlist, 0)
+	}
 	return &MasterPlaylist{
-		Morning:   make([]*Playlist, 0),
-		Afternoon: make([]*Playlist, 0),
-		Evening:   make([]*Playlist, 0),
-		Night:     make([]*Playlist, 0),
+		playlists: pls,
+		timeSlots: slots,
 		Library:   NewTrackLibrary(),
 	}
 }
@@ -54,11 +58,14 @@ func NewMasterPlaylistWithLibrary(lib *TrackLibrary) *MasterPlaylist {
 	if lib == nil {
 		lib = NewTrackLibrary()
 	}
+	slots := DefaultTimeSlots()
+	pls := make(map[TimeTag][]*Playlist)
+	for _, s := range slots {
+		pls[s.Tag] = make([]*Playlist, 0)
+	}
 	return &MasterPlaylist{
-		Morning:   make([]*Playlist, 0),
-		Afternoon: make([]*Playlist, 0),
-		Evening:   make([]*Playlist, 0),
-		Night:     make([]*Playlist, 0),
+		playlists: pls,
+		timeSlots: slots,
 		Library:   lib,
 	}
 }
@@ -70,43 +77,103 @@ func (mp *MasterPlaylist) GetPlaylists(tag TimeTag) []*Playlist {
 	return mp.getPlaylistsUnsafe(tag)
 }
 
-// getPlaylistsUnsafe returns the slice pointer for the given tag without
-// locking. The caller must hold at least a read lock.
+// getPlaylistsUnsafe returns the slice for the given tag without locking.
+// The caller must hold at least a read lock.
 func (mp *MasterPlaylist) getPlaylistsUnsafe(tag TimeTag) []*Playlist {
-	switch tag {
-	case TagMorning:
-		return mp.Morning
-	case TagAfternoon:
-		return mp.Afternoon
-	case TagEvening:
-		return mp.Evening
-	case TagNight:
-		return mp.Night
-	default:
-		return nil
-	}
+	return mp.playlists[tag]
 }
 
 // setPlaylistsUnsafe replaces the slice for the given tag. The caller must
 // hold a write lock.
 func (mp *MasterPlaylist) setPlaylistsUnsafe(tag TimeTag, pls []*Playlist) {
-	switch tag {
-	case TagMorning:
-		mp.Morning = pls
-	case TagAfternoon:
-		mp.Afternoon = pls
-	case TagEvening:
-		mp.Evening = pls
-	case TagNight:
-		mp.Night = pls
+	mp.playlists[tag] = pls
+}
+
+// configuredTagsUnsafe returns the ordered list of tags from the configured
+// time slots. Caller must hold at least a read lock.
+func (mp *MasterPlaylist) configuredTagsUnsafe() []TimeTag {
+	return TimeSlotTags(mp.timeSlots)
+}
+
+// ConfiguredTags returns the ordered list of tags from the configured time
+// slots. Safe for concurrent use.
+func (mp *MasterPlaylist) ConfiguredTags() []TimeTag {
+	mp.mu.RLock()
+	defer mp.mu.RUnlock()
+	return mp.configuredTagsUnsafe()
+}
+
+// IsConfiguredTag returns true if the given tag exists in the configured time
+// slots. Safe for concurrent use.
+func (mp *MasterPlaylist) IsConfiguredTag(tag TimeTag) bool {
+	mp.mu.RLock()
+	defer mp.mu.RUnlock()
+	for _, s := range mp.timeSlots {
+		if s.Tag == tag {
+			return true
+		}
 	}
+	return false
+}
+
+// GetTimeSlots returns a copy of the configured time slots.
+func (mp *MasterPlaylist) GetTimeSlots() []TimeSlot {
+	mp.mu.RLock()
+	defer mp.mu.RUnlock()
+	slots := make([]TimeSlot, len(mp.timeSlots))
+	copy(slots, mp.timeSlots)
+	return slots
+}
+
+// SetTimeSlots replaces all configured time slots after validation. Playlists
+// assigned to tags that no longer exist are preserved in the map (they become
+// unreachable by the scheduler until reassigned or the tag is re-added).
+func (mp *MasterPlaylist) SetTimeSlots(slots []TimeSlot) error {
+	if err := ValidateTimeSlots(slots); err != nil {
+		return err
+	}
+
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+
+	mp.timeSlots = make([]TimeSlot, len(slots))
+	copy(mp.timeSlots, slots)
+
+	// Ensure every configured tag has an entry in the playlists map.
+	for _, s := range mp.timeSlots {
+		if _, ok := mp.playlists[s.Tag]; !ok {
+			mp.playlists[s.Tag] = make([]*Playlist, 0)
+		}
+	}
+
+	slog.Info("Time slots updated", "count", len(slots))
+	return nil
+}
+
+// TimeTagForHourConfigured returns the TimeTag for the given hour using the
+// configured time slots. Falls back to DefaultTimeSlots if none are configured.
+func (mp *MasterPlaylist) TimeTagForHourConfigured(hour int) TimeTag {
+	mp.mu.RLock()
+	defer mp.mu.RUnlock()
+
+	slots := mp.timeSlots
+	if len(slots) == 0 {
+		slots = DefaultTimeSlots()
+	}
+	for _, s := range slots {
+		if s.Contains(hour) {
+			return s.Tag
+		}
+	}
+	// Should not happen if slots are validated, but fall back to first slot.
+	return slots[0].Tag
 }
 
 // AssignPlaylist adds a playlist to the specified time tag. If a playlist with
 // the same ID already exists under that tag it is replaced. The playlist's
 // library reference is set to this master playlist's library.
 func (mp *MasterPlaylist) AssignPlaylist(tag TimeTag, pl *Playlist) error {
-	if !IsValidTimeTag(string(tag)) {
+	if !mp.IsConfiguredTag(tag) {
 		return fmt.Errorf("invalid time tag: %s", tag)
 	}
 
@@ -137,7 +204,7 @@ func (mp *MasterPlaylist) AssignPlaylist(tag TimeTag, pl *Playlist) error {
 // RemovePlaylist removes a playlist with the given ID from the specified tag.
 // Returns an error if the playlist is not found under that tag.
 func (mp *MasterPlaylist) RemovePlaylist(tag TimeTag, playlistID int64) error {
-	if !IsValidTimeTag(string(tag)) {
+	if !mp.IsConfiguredTag(tag) {
 		return fmt.Errorf("invalid time tag: %s", tag)
 	}
 
@@ -171,7 +238,7 @@ func (mp *MasterPlaylist) FindPlaylistByID(id int64) (*Playlist, TimeTag, error)
 	mp.mu.RLock()
 	defer mp.mu.RUnlock()
 
-	for _, tag := range ValidTimeTags {
+	for _, tag := range mp.configuredTagsUnsafe() {
 		for _, p := range mp.getPlaylistsUnsafe(tag) {
 			if p.ID == id {
 				return p, tag, nil
@@ -187,7 +254,7 @@ func (mp *MasterPlaylist) AllPlaylists() []*Playlist {
 	defer mp.mu.RUnlock()
 
 	var all []*Playlist
-	for _, tag := range ValidTimeTags {
+	for _, tag := range mp.configuredTagsUnsafe() {
 		all = append(all, mp.getPlaylistsUnsafe(tag)...)
 	}
 	return all
@@ -200,7 +267,7 @@ func (mp *MasterPlaylist) AllTracks() []*Track {
 	defer mp.mu.RUnlock()
 
 	var tracks []*Track
-	for _, tag := range ValidTimeTags {
+	for _, tag := range mp.configuredTagsUnsafe() {
 		for _, pl := range mp.getPlaylistsUnsafe(tag) {
 			pl.mu.RLock()
 			tracks = append(tracks, pl.Tracks...)
@@ -225,7 +292,7 @@ func (mp *MasterPlaylist) AllTracksDeduped() []*Track {
 	// Fallback for when no library is set (shouldn't happen in normal operation).
 	seen := make(map[string]bool)
 	var tracks []*Track
-	for _, tag := range ValidTimeTags {
+	for _, tag := range mp.configuredTagsUnsafe() {
 		for _, pl := range mp.getPlaylistsUnsafe(tag) {
 			pl.mu.RLock()
 			for _, t := range pl.Tracks {
@@ -248,7 +315,7 @@ func (mp *MasterPlaylist) RemoveTrackFromAll(checksum string) int {
 	defer mp.mu.RUnlock()
 
 	total := 0
-	for _, tag := range ValidTimeTags {
+	for _, tag := range mp.configuredTagsUnsafe() {
 		for _, pl := range mp.getPlaylistsUnsafe(tag) {
 			total += pl.RemoveTracksByChecksum(checksum)
 		}
@@ -290,20 +357,50 @@ func CurrentTimeTagIn(loc *time.Location) TimeTag {
 	return TimeTagForHour(time.Now().In(loc).Hour())
 }
 
-// ResolveActiveTag determines which time tag should be active based on the
-// current time and the master playlist's configured timezone. It returns the
-// tag and whether a change from the previous active tag occurred.
-func (mp *MasterPlaylist) ResolveActiveTag() (TimeTag, bool) {
-	mp.mu.Lock()
-	defer mp.mu.Unlock()
+// resolveActiveTagUnsafe resolves the active time tag based on the current
+// time and the configured timezone. The caller MUST hold mp.mu (at least
+// a read lock; a write lock is needed if the tag actually changes).
+//
+// This is the lock-free internal core of ResolveActiveTag, extracted so that
+// Next() (which already holds the lock) can resolve the tag without
+// re-entering the mutex (which would deadlock).
+func (mp *MasterPlaylist) resolveActiveTagUnsafe() (TimeTag, bool) {
+	loc := mp.location
+	if loc == nil {
+		loc = time.UTC
+	}
+	hour := time.Now().In(loc).Hour()
 
-	tag := CurrentTimeTagIn(mp.location)
+	slots := mp.timeSlots
+	if len(slots) == 0 {
+		slots = DefaultTimeSlots()
+	}
+	var tag TimeTag
+	for _, s := range slots {
+		if s.Contains(hour) {
+			tag = s.Tag
+			break
+		}
+	}
+	if tag == "" {
+		tag = slots[0].Tag
+	}
+
 	changed := tag != mp.activeTag
 	if changed {
 		mp.activeTag = tag
 		mp.activePlaylistIndex = 0
 	}
 	return tag, changed
+}
+
+// ResolveActiveTag determines which time tag should be active based on the
+// current time and the master playlist's configured timezone. It returns the
+// tag and whether a change from the previous active tag occurred.
+func (mp *MasterPlaylist) ResolveActiveTag() (TimeTag, bool) {
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+	return mp.resolveActiveTagUnsafe()
 }
 
 // SetActiveTag explicitly sets the active tag (e.g. for testing or manual
@@ -382,7 +479,7 @@ func (mp *MasterPlaylist) ActivePlaylist() (*Playlist, error) {
 	}
 
 	// Fallback: find any tag that has playlists.
-	for _, tag := range ValidTimeTags {
+	for _, tag := range mp.configuredTagsUnsafe() {
 		if pls := mp.getPlaylistsUnsafe(tag); len(pls) > 0 {
 			return pls[0], nil
 		}
@@ -400,6 +497,12 @@ func (mp *MasterPlaylist) ActivePlaylist() (*Playlist, error) {
 func (mp *MasterPlaylist) Next() (*Track, *Playlist, error) {
 	mp.mu.Lock()
 
+	// Resolve the active tag if it hasn't been set yet (e.g. the scheduler
+	// hasn't run its first tick). This mirrors the old Next() behaviour.
+	if mp.activeTag == "" {
+		mp.resolveActiveTagUnsafe()
+	}
+
 	// Determine the effective playlists for the active tag (with fallback).
 	var effectiveTag TimeTag
 	var playlists []*Playlist
@@ -409,7 +512,7 @@ func (mp *MasterPlaylist) Next() (*Track, *Playlist, error) {
 		playlists = pls
 	} else {
 		// Fallback to any tag with playlists.
-		for _, tag := range ValidTimeTags {
+		for _, tag := range mp.configuredTagsUnsafe() {
 			if pls := mp.getPlaylistsUnsafe(tag); len(pls) > 0 {
 				effectiveTag = tag
 				playlists = pls
@@ -476,7 +579,7 @@ func (mp *MasterPlaylist) RemoveDeletedTracks() int {
 	defer mp.mu.RUnlock()
 
 	removed := 0
-	for _, tag := range ValidTimeTags {
+	for _, tag := range mp.configuredTagsUnsafe() {
 		for _, pl := range mp.getPlaylistsUnsafe(tag) {
 			pl.mu.Lock()
 			alive := make([]*Track, 0, len(pl.Tracks))
@@ -510,12 +613,11 @@ func (mp *MasterPlaylist) Summary() map[TimeTag]int {
 	mp.mu.RLock()
 	defer mp.mu.RUnlock()
 
-	return map[TimeTag]int{
-		TagMorning:   len(mp.Morning),
-		TagAfternoon: len(mp.Afternoon),
-		TagEvening:   len(mp.Evening),
-		TagNight:     len(mp.Night),
+	result := make(map[TimeTag]int)
+	for _, tag := range mp.configuredTagsUnsafe() {
+		result[tag] = len(mp.getPlaylistsUnsafe(tag))
 	}
+	return result
 }
 
 // activePlaylistUnsafe returns the active playlist without locking.
@@ -528,7 +630,7 @@ func (mp *MasterPlaylist) activePlaylistUnsafe() *Playlist {
 		}
 		return pls[idx]
 	}
-	for _, tag := range ValidTimeTags {
+	for _, tag := range mp.configuredTagsUnsafe() {
 		if pls := mp.getPlaylistsUnsafe(tag); len(pls) > 0 {
 			return pls[0]
 		}
@@ -627,7 +729,7 @@ func (mp *MasterPlaylist) TotalTracks() int {
 	defer mp.mu.RUnlock()
 
 	total := 0
-	for _, tag := range ValidTimeTags {
+	for _, tag := range mp.configuredTagsUnsafe() {
 		for _, pl := range mp.getPlaylistsUnsafe(tag) {
 			total += pl.Count()
 		}
@@ -649,7 +751,7 @@ func (mp *MasterPlaylist) IsEmpty() bool {
 	mp.mu.RLock()
 	defer mp.mu.RUnlock()
 
-	for _, tag := range ValidTimeTags {
+	for _, tag := range mp.configuredTagsUnsafe() {
 		if len(mp.getPlaylistsUnsafe(tag)) > 0 {
 			return false
 		}

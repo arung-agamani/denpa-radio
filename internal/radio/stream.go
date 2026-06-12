@@ -256,6 +256,16 @@ func NewStreamHandler(broadcaster *Broadcaster, stationName string, maxClients i
 }
 
 func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// For HEAD requests, return only the response headers — no subscription,
+	// no body. This lets clients (e.g. Lavalink) probe the stream without
+	// consuming a listener slot or entering the broadcast loop.
+	if r.Method == http.MethodHead {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.Header().Set("Cache-Control", "no-cache, no-store")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// Enforce client limit.
 	active := int32(h.broadcaster.ActiveClients())
 	if active >= h.maxClients {
@@ -275,11 +285,19 @@ func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Set response headers for an infinite MP3 stream.
 	w.Header().Set("Content-Type", "audio/mpeg")
-	w.Header().Set("Transfer-Encoding", "chunked")
-	w.Header().Set("icy-name", h.stationName)
-	w.Header().Set("icy-br", "128")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
-	w.Header().Set("Connection", "keep-alive")
+
+	// ICY (Icecast/SHOUTcast) headers – only send when the client explicitly
+	// asks for them via the Icy-MetaData request header. Some players (notably
+	// certain Lavalink/Lavaplayer configurations) can get confused when they
+	// see icy-name/icy-br on a standard HTTP response and may attempt to
+	// parse the stream as ICY protocol (which uses raw framing, not chunked
+	// transfer encoding). By default we serve clean HTTP; ICY-aware clients
+	// that send the header get the extra metadata.
+	if r.Header.Get("Icy-MetaData") != "" {
+		w.Header().Set("icy-name", h.stationName)
+		w.Header().Set("icy-br", "128")
+	}
 
 	flusher, canFlush := w.(http.Flusher)
 	ctx := r.Context()

@@ -19,6 +19,7 @@ type MasterSnapshot struct {
 	ActivePlaylistID *int64
 	TotalTracks      int
 	Tags             map[string]MasterTagInfo
+	TimeSlots        []playlist.TimeSlot
 }
 
 // MasterService implements the business logic for master playlist and
@@ -42,7 +43,7 @@ func (s *MasterService) save() {
 // Get returns a snapshot of the full master playlist structure.
 func (s *MasterService) Get() MasterSnapshot {
 	tags := make(map[string]MasterTagInfo)
-	for _, tag := range playlist.ValidTimeTags {
+	for _, tag := range s.master.ConfiguredTags() {
 		pls := s.master.GetPlaylists(tag)
 		tags[string(tag)] = MasterTagInfo{Playlists: pls, Count: len(pls)}
 	}
@@ -57,13 +58,14 @@ func (s *MasterService) Get() MasterSnapshot {
 		ActivePlaylistID: activePlaylistID,
 		TotalTracks:      s.master.TotalTracks(),
 		Tags:             tags,
+		TimeSlots:        s.master.GetTimeSlots(),
 	}
 }
 
 // AssignPlaylistToTag moves or assigns a playlist to a specific time tag.
 func (s *MasterService) AssignPlaylistToTag(playlistID int64, tagStr string) error {
-	if !playlist.IsValidTimeTag(tagStr) {
-		return fmt.Errorf("invalid tag: must be one of morning, afternoon, evening, night")
+	if !s.master.IsConfiguredTag(playlist.TimeTag(tagStr)) {
+		return fmt.Errorf("invalid tag: %s is not a configured time slot", tagStr)
 	}
 	tag := playlist.TimeTag(tagStr)
 	pl, currentTag, err := s.master.FindPlaylistByID(playlistID)
@@ -86,13 +88,29 @@ func (s *MasterService) AssignPlaylistToTag(playlistID int64, tagStr string) err
 
 // RemovePlaylistFromTag removes a playlist from a specific time tag.
 func (s *MasterService) RemovePlaylistFromTag(tagStr string, playlistID int64) error {
-	if !playlist.IsValidTimeTag(tagStr) {
-		return fmt.Errorf("invalid tag: must be one of morning, afternoon, evening, night")
+	if !s.master.IsConfiguredTag(playlist.TimeTag(tagStr)) {
+		return fmt.Errorf("invalid tag: %s is not a configured time slot", tagStr)
 	}
 	tag := playlist.TimeTag(tagStr)
 	if err := s.master.RemovePlaylist(tag, playlistID); err != nil {
 		return err
 	}
 	s.save()
+	return nil
+}
+
+// GetTimeSlots returns the currently configured time slots.
+func (s *MasterService) GetTimeSlots() []playlist.TimeSlot {
+	return s.master.GetTimeSlots()
+}
+
+// SetTimeSlots replaces all time slots after validation. Saves and forces a
+// scheduler re-check.
+func (s *MasterService) SetTimeSlots(slots []playlist.TimeSlot) error {
+	if err := s.master.SetTimeSlots(slots); err != nil {
+		return err
+	}
+	s.save()
+	s.scheduler.ForceCheck()
 	return nil
 }

@@ -2,6 +2,7 @@ package playlist
 
 import (
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"sync"
 )
@@ -16,10 +17,13 @@ const (
 	TagNight     TimeTag = "night"
 )
 
-// ValidTimeTags contains all valid TimeTag values.
+// ValidTimeTags contains the default TimeTag values. Callers that need the
+// currently-configured set should use MasterPlaylist.ConfiguredTags() instead.
 var ValidTimeTags = []TimeTag{TagMorning, TagAfternoon, TagEvening, TagNight}
 
-// IsValidTimeTag returns true if the given string is a valid TimeTag.
+// IsValidTimeTag returns true if the given string matches one of the default
+// time tags. For dynamic validation against configured time slots, use
+// MasterPlaylist.IsConfiguredTag().
 func IsValidTimeTag(s string) bool {
 	for _, t := range ValidTimeTags {
 		if string(t) == s {
@@ -27,6 +31,96 @@ func IsValidTimeTag(s string) bool {
 		}
 	}
 	return false
+}
+
+// TimeSlot defines a named time range for playlist scheduling. StartHour is
+// inclusive (0-23) and EndHour is exclusive (0-23). A slot that wraps around
+// midnight has StartHour > EndHour (e.g. StartHour=21, EndHour=6 covers
+// 21:00-05:59).
+type TimeSlot struct {
+	Tag       TimeTag `json:"tag"`
+	Label     string  `json:"label"`
+	StartHour int     `json:"startHour"`
+	EndHour   int     `json:"endHour"`
+}
+
+// Contains returns true if the given hour (0-23) falls within this time slot.
+func (ts TimeSlot) Contains(hour int) bool {
+	if ts.StartHour < ts.EndHour {
+		return hour >= ts.StartHour && hour < ts.EndHour
+	}
+	// Wraps around midnight.
+	return hour >= ts.StartHour || hour < ts.EndHour
+}
+
+// DefaultTimeSlots returns the built-in time slot configuration matching the
+// original hard-coded schedule.
+func DefaultTimeSlots() []TimeSlot {
+	return []TimeSlot{
+		{Tag: TagMorning, Label: "Morning", StartHour: 6, EndHour: 12},
+		{Tag: TagAfternoon, Label: "Afternoon", StartHour: 12, EndHour: 18},
+		{Tag: TagEvening, Label: "Evening", StartHour: 18, EndHour: 21},
+		{Tag: TagNight, Label: "Night", StartHour: 21, EndHour: 6},
+	}
+}
+
+// ValidateTimeSlots checks that a set of time slots covers all 24 hours
+// exactly once (no gaps, no overlaps) and that each slot has a non-empty tag.
+func ValidateTimeSlots(slots []TimeSlot) error {
+	if len(slots) == 0 {
+		return errors.New("at least one time slot is required")
+	}
+
+	// Check for duplicate tags.
+	seen := make(map[TimeTag]bool)
+	for _, s := range slots {
+		if s.Tag == "" {
+			return errors.New("time slot tag must not be empty")
+		}
+		if s.Label == "" {
+			return fmt.Errorf("time slot %q must have a label", s.Tag)
+		}
+		if s.StartHour < 0 || s.StartHour > 23 {
+			return fmt.Errorf("time slot %q: startHour must be 0-23", s.Tag)
+		}
+		if s.EndHour < 0 || s.EndHour > 23 {
+			return fmt.Errorf("time slot %q: endHour must be 0-23", s.Tag)
+		}
+		if s.StartHour == s.EndHour {
+			return fmt.Errorf("time slot %q: startHour and endHour must differ", s.Tag)
+		}
+		if seen[s.Tag] {
+			return fmt.Errorf("duplicate time slot tag: %q", s.Tag)
+		}
+		seen[s.Tag] = true
+	}
+
+	// Verify each hour 0-23 is covered by exactly one slot.
+	for h := 0; h < 24; h++ {
+		count := 0
+		for _, s := range slots {
+			if s.Contains(h) {
+				count++
+			}
+		}
+		if count == 0 {
+			return fmt.Errorf("hour %d is not covered by any time slot", h)
+		}
+		if count > 1 {
+			return fmt.Errorf("hour %d is covered by multiple time slots", h)
+		}
+	}
+
+	return nil
+}
+
+// TimeSlotTags extracts the ordered list of tags from a slice of time slots.
+func TimeSlotTags(slots []TimeSlot) []TimeTag {
+	tags := make([]TimeTag, len(slots))
+	for i, s := range slots {
+		tags[i] = s.Tag
+	}
+	return tags
 }
 
 // lastPlaylistID is a global counter for generating unique playlist IDs.

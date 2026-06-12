@@ -341,6 +341,17 @@ export async function importPlaylist(jsonString: string): Promise<unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// Time Slots
+// ---------------------------------------------------------------------------
+
+export interface TimeSlot {
+    tag: string;
+    label: string;
+    startHour: number;
+    endHour: number;
+}
+
+// ---------------------------------------------------------------------------
 // Master playlist
 // ---------------------------------------------------------------------------
 
@@ -354,6 +365,7 @@ export interface MasterPlaylist {
     active_playlist_id: number | null;
     total_tracks: number;
     tags: Record<string, TagEntry>;
+    time_slots: TimeSlot[];
 }
 
 export async function getMasterPlaylist(): Promise<MasterPlaylist> {
@@ -366,6 +378,18 @@ export async function assignPlaylistToTag(tag: string, playlistId: number): Prom
 
 export async function removePlaylistFromTag(tag: string, playlistId: number): Promise<unknown> {
     return request("DELETE", `/api/master/${tag}/${playlistId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Time Slots (configurable schedule)
+// ---------------------------------------------------------------------------
+
+export async function getTimeSlots(): Promise<{ timeSlots: TimeSlot[] }> {
+    return request<{ timeSlots: TimeSlot[] }>("GET", "/api/timeslots", null, { noAuth: true });
+}
+
+export async function setTimeSlots(timeSlots: TimeSlot[]): Promise<{ timeSlots: TimeSlot[] }> {
+    return request<{ timeSlots: TimeSlot[] }>("PUT", "/api/timeslots", { timeSlots });
 }
 
 // ---------------------------------------------------------------------------

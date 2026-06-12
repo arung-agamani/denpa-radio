@@ -158,8 +158,8 @@ func (s *RadioService) SchedulerStatus() SchedulerSnapshot {
 	return SchedulerSnapshot{
 		Running:       s.scheduler.Running(),
 		LastTag:       s.scheduler.LastTag(),
-		TimeTags:      playlist.ValidTimeTags,
-		CurrentTag:    playlist.CurrentTimeTagIn(loc),
+		TimeTags:      s.master.ConfiguredTags(),
+		CurrentTag:    s.master.TimeTagForHourConfigured(time.Now().In(loc).Hour()),
 		Summary:       s.master.Summary(),
 		LibraryTracks: s.master.LibraryTrackCount(),
 		Timezone:      tz,
