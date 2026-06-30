@@ -1,16 +1,16 @@
 <script lang="ts">
-  import type { TrackItem } from '../lib/api';
+  import type { TrackItem } from '$lib/api';
   import { onMount } from 'svelte';
-  import Player from '../components/Player.svelte';
-  import NowPlaying from '../components/NowPlaying.svelte';
-  import TrackList from '../components/TrackList.svelte';
-  import { status, stationName, currentTrackInfo } from '../lib/stores';
-  import { getQueue } from '../lib/api';
+  import Player from '$lib/components/Player.svelte';
+  import NowPlaying from '$lib/components/NowPlaying.svelte';
+  import TrackList from '$lib/components/TrackList.svelte';
+  import { status, stationName, currentTrackInfo } from '$lib/stores';
+  import { getQueue } from '$lib/api';
 
-  let tracks: TrackItem[] = [];
-  let loading = true;
-  let error: string | null = null;
-  let showFullQueue = false;
+  let tracks: TrackItem[] = $state([]);
+  let loading = $state(true);
+  let error: string | null = $state(null);
+  let showFullQueue = $state(false);
 
   onMount(async () => {
     await loadQueue();
@@ -24,7 +24,7 @@
       tracks = data.tracks || [];
     } catch (err) {
       console.error('Failed to load queue:', err);
-      error = err instanceof Error ? err instanceof Error ? err.message : String(err) : 'Failed to load queue';
+      error = err instanceof Error ? err.message : 'Failed to load queue';
     } finally {
       loading = false;
     }
@@ -32,25 +32,29 @@
 
   // Reload queue whenever the current track changes.
   let prevChecksum = '';
-  $: currentChecksum = $currentTrackInfo?.checksum || '';
-  $: if (currentChecksum !== prevChecksum) {
-    prevChecksum = currentChecksum;
-    if (prevChecksum !== '') {
-      loadQueue();
+  let currentChecksum = $derived($currentTrackInfo?.checksum || '');
+  $effect(() => {
+    if (currentChecksum !== prevChecksum) {
+      prevChecksum = currentChecksum;
+      if (prevChecksum !== '') {
+        loadQueue();
+      }
     }
-  }
+  });
 
   // Also reload when the active playlist's track count changes (add/remove).
   let prevTotalTracks = -1;
-  $: if ($status.total_tracks !== prevTotalTracks && prevTotalTracks !== -1) {
-    prevTotalTracks = $status.total_tracks;
-    loadQueue();
-  } else if (prevTotalTracks === -1) {
-    prevTotalTracks = $status.total_tracks || 0;
-  }
+  $effect(() => {
+    if ($status.total_tracks !== prevTotalTracks && prevTotalTracks !== -1) {
+      prevTotalTracks = $status.total_tracks;
+      loadQueue();
+    } else if (prevTotalTracks === -1) {
+      prevTotalTracks = $status.total_tracks || 0;
+    }
+  });
 
-  $: displayTracks = showFullQueue ? tracks : tracks.slice(0, 25);
-  $: hasMore = tracks.length > 25 && !showFullQueue;
+  let displayTracks = $derived(showFullQueue ? tracks : tracks.slice(0, 25));
+  let hasMore = $derived(tracks.length > 25 && !showFullQueue);
 </script>
 
 <div class="px-4 sm:px-6 lg:px-8 py-8 space-y-6">
@@ -85,7 +89,7 @@
       <button
         type="button"
         class="text-sm text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 font-medium transition-colors flex items-center gap-1.5"
-        on:click={loadQueue}
+        onclick={loadQueue}
         title="Refresh queue"
       >
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -113,7 +117,7 @@
           <button
             type="button"
             class="px-4 py-2 text-sm font-medium text-white bg-primary-500 hover:bg-primary-600 rounded-lg transition-colors"
-            on:click={loadQueue}
+            onclick={loadQueue}
           >
             Try Again
           </button>
@@ -133,7 +137,7 @@
             <button
               type="button"
               class="text-sm font-medium text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 transition-colors"
-              on:click={() => (showFullQueue = true)}
+              onclick={() => (showFullQueue = true)}
             >
               Show all {tracks.length} tracks
               <svg class="inline-block w-4 h-4 ml-1" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -146,7 +150,7 @@
             <button
               type="button"
               class="text-sm font-medium text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300 transition-colors"
-              on:click={() => (showFullQueue = false)}
+              onclick={() => (showFullQueue = false)}
             >
               Show fewer tracks
               <svg class="inline-block w-4 h-4 ml-1" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">

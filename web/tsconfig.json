@@ -1,5 +1,5 @@
 {
-  "extends": "@tsconfig/svelte/tsconfig.json",
+  "extends": "./.svelte-kit/tsconfig.json",
   "compilerOptions": {
     "target": "ESNext",
     "useDefineForClassFields": true,
@@ -9,11 +9,7 @@
     "allowImportingTsExtensions": true,
     "strict": true,
     "noEmit": true,
-    "sourceMap": true,
-    "baseUrl": ".",
-    "paths": {
-      "$lib/*": ["src/lib/*"]
-    }
+    "sourceMap": true
   },
   "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
 }

@@ -31,7 +31,7 @@ func Load() *Config {
 		SampleRate:   getEnv("SAMPLE_RATE", "44100"),
 		Channels:     getEnv("CHANNELS", "2"),
 		PlaylistFile: getEnv("PLAYLIST_FILE", "./data/playlists.json"),
-		WebDir:       getEnv("WEB_DIR", "./web/dist"),
+		WebDir:       getEnv("WEB_DIR", "./web/build"),
 		DJUsername:   getEnv("DJ_USERNAME", "dj"),
 		DJPassword:   getEnv("DJ_PASSWORD", "denpa"),
 		JWTSecret:    getEnv("JWT_SECRET", "change-me-in-production-please"),

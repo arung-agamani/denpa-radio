@@ -1,27 +1,29 @@
 <script lang="ts">
-  import { path, navigate } from '../lib/router';
-  import { auth, isAuthenticated } from '../lib/auth';
-  import { stationName, activeClients } from '../lib/stores';
+  import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
+  import { auth, isAuthenticated } from '$lib/auth';
+  import { stationName, activeClients } from '$lib/stores';
 
-  let mobileMenuOpen = false;
+  let mobileMenuOpen = $state(false);
 
   function toggleMobile() {
     mobileMenuOpen = !mobileMenuOpen;
   }
 
   function go(to: string) {
-    navigate(to);
+    goto(to);
     mobileMenuOpen = false;
   }
 
   function handleLogout() {
     auth.logout();
-    navigate('/');
+    goto('/');
     mobileMenuOpen = false;
   }
 
-  $: isHome = $path === '/' || $path === '';
-  $: isDJ = $path.startsWith('/dj');
+  let currentPath = $derived($page.url.pathname);
+  let isHome = $derived(currentPath === '/' || currentPath === '');
+  let isDJ = $derived(currentPath.startsWith('/dj'));
 </script>
 
 <nav class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0 z-40">
@@ -31,7 +33,7 @@
       <button
         type="button"
         class="flex items-center gap-2 text-xl font-bold text-primary-600 dark:text-primary-400 hover:opacity-80 transition-opacity"
-        on:click={() => go('/')}
+        onclick={() => go('/')}
       >
         <span class="text-2xl">📻</span>
         <span class="hidden sm:inline">{$stationName}</span>
@@ -45,7 +47,7 @@
           class="px-4 py-2 rounded-lg text-sm font-medium transition-colors {isHome
             ? 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300'
             : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
-          on:click={() => go('/')}
+          onclick={() => go('/')}
         >
           🎵 Listen
         </button>
@@ -55,7 +57,7 @@
           class="px-4 py-2 rounded-lg text-sm font-medium transition-colors {isDJ
             ? 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300'
             : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
-          on:click={() => go('/dj')}
+          onclick={() => go('/dj')}
         >
           🎛️ DJ Panel
         </button>
@@ -74,7 +76,7 @@
           <button
             type="button"
             class="ml-2 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-            on:click={handleLogout}
+            onclick={handleLogout}
           >
             Logout
           </button>
@@ -85,7 +87,7 @@
       <button
         type="button"
         class="md:hidden inline-flex items-center justify-center p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
-        on:click={toggleMobile}
+        onclick={toggleMobile}
         aria-expanded={mobileMenuOpen}
         aria-label="Toggle navigation"
       >
@@ -111,7 +113,7 @@
           class="w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-colors {isHome
             ? 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300'
             : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
-          on:click={() => go('/')}
+          onclick={() => go('/')}
         >
           🎵 Listen
         </button>
@@ -121,7 +123,7 @@
           class="w-full text-left px-4 py-2.5 rounded-lg text-sm font-medium transition-colors {isDJ
             ? 'bg-primary-100 text-primary-700 dark:bg-primary-900 dark:text-primary-300'
             : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
-          on:click={() => go('/dj')}
+          onclick={() => go('/dj')}
         >
           🎛️ DJ Panel
         </button>
@@ -139,7 +141,7 @@
             <button
               type="button"
               class="text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-              on:click={handleLogout}
+              onclick={handleLogout}
             >
               Logout
             </button>

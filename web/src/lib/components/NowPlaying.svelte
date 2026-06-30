@@ -1,14 +1,14 @@
 <script lang="ts">
-  import { currentTrack, currentTrackInfo, activeTag, activePlaylist, status, timeSlots } from '../lib/stores';
-  import { getTagEmoji, getTagLabel } from '../lib/tags';
+  import { currentTrack, currentTrackInfo, activeTag, activePlaylist, status, timeSlots } from '$lib/stores';
+  import { getTagEmoji, getTagLabel } from '$lib/tags';
 
-  $: track = $currentTrackInfo;
-  $: tag = $activeTag;
-  $: playlist = $activePlaylist;
-  $: trackName = $currentTrack;
-  $: isIdle = !trackName || trackName === 'none';
-  $: summary = ($status.playlist_summary || {}) as Record<string, number>;
-  $: totalTracks = $status.total_tracks || 0;
+  let track = $derived($currentTrackInfo);
+  let tag = $derived($activeTag);
+  let playlist = $derived($activePlaylist);
+  let trackName = $derived($currentTrack);
+  let isIdle = $derived(!trackName || trackName === 'none');
+  let summary = $derived(($status.playlist_summary || {}) as Record<string, number>);
+  let totalTracks = $derived($status.total_tracks || 0);
 </script>
 
 <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -36,46 +36,26 @@
       <!-- Track details -->
       <div class="flex-1 min-w-0">
         <p class="text-xs font-semibold uppercase tracking-wider text-primary-500 dark:text-primary-400 mb-1">
-          {#if isIdle}
-            Nothing Playing
-          {:else}
-            Now Playing
-          {/if}
+          {#if isIdle}Nothing Playing{:else}Now Playing{/if}
         </p>
 
         {#if track}
-          <h3 class="text-lg font-bold text-gray-900 dark:text-white truncate" title={track.title}>
-            {track.title || trackName}
-          </h3>
-
+          <h3 class="text-lg font-bold text-gray-900 dark:text-white truncate" title={track.title}>{track.title || trackName}</h3>
           {#if track.artist}
-            <p class="text-sm text-gray-600 dark:text-gray-300 truncate mt-0.5" title={track.artist}>
-              {track.artist}
-            </p>
+            <p class="text-sm text-gray-600 dark:text-gray-300 truncate mt-0.5" title={track.artist}>{track.artist}</p>
           {/if}
-
           {#if track.album}
             <p class="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5" title={track.album}>
               {track.album}
-              {#if track.year}
-                <span class="text-gray-400 dark:text-gray-500">({track.year})</span>
-              {/if}
+              {#if track.year}<span class="text-gray-400 dark:text-gray-500">({track.year})</span>{/if}
             </p>
           {/if}
         {:else if !isIdle}
-          <h3 class="text-lg font-bold text-gray-900 dark:text-white truncate" title={trackName}>
-            {trackName}
-          </h3>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-            No metadata available
-          </p>
+          <h3 class="text-lg font-bold text-gray-900 dark:text-white truncate" title={trackName}>{trackName}</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">No metadata available</p>
         {:else}
-          <h3 class="text-lg font-bold text-gray-400 dark:text-gray-500">
-            Waiting for stream…
-          </h3>
-          <p class="text-sm text-gray-400 dark:text-gray-500 mt-0.5">
-            Press play to start listening
-          </p>
+          <h3 class="text-lg font-bold text-gray-400 dark:text-gray-500">Waiting for stream…</h3>
+          <p class="text-sm text-gray-400 dark:text-gray-500 mt-0.5">Press play to start listening</p>
         {/if}
       </div>
     </div>
@@ -85,7 +65,6 @@
 
     <!-- Active playlist & tag info -->
     <div class="flex flex-wrap items-center gap-3">
-      <!-- Time tag badge -->
       {#if tag}
         <div class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
           <span>{getTagEmoji(tag)}</span>
@@ -93,7 +72,6 @@
         </div>
       {/if}
 
-      <!-- Active playlist name -->
       {#if playlist}
         <div class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">
           <span>🎵</span>
@@ -101,26 +79,18 @@
         </div>
       {/if}
 
-      <!-- Track count -->
       <div class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-gray-50 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400">
         <span>💿</span>
         <span>{totalTracks} track{totalTracks !== 1 ? 's' : ''}</span>
       </div>
 
-      <!-- Additional track metadata badges -->
       {#if track}
         {#if track.genre}
-          <div class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-300">
-            {track.genre}
-          </div>
+          <div class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-300">{track.genre}</div>
         {/if}
-
         {#if track.format}
-          <div class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 uppercase">
-            {track.format}
-          </div>
+          <div class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 uppercase">{track.format}</div>
         {/if}
-
         {#if track.duration && track.duration > 0}
           <div class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-50 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400">
             {Math.floor(track.duration / 60)}:{(track.duration % 60).toString().padStart(2, '0')}
@@ -129,21 +99,13 @@
       {/if}
     </div>
 
-    <!-- Time slot overview (small icons showing which slots have playlists) -->
+    <!-- Time slot overview -->
     {#if Object.keys(summary).length > 0}
       <div class="mt-4 flex items-center gap-2">
         <span class="text-xs text-gray-400 dark:text-gray-500 mr-1">Schedule:</span>
         {#each $timeSlots as slotDef (slotDef.tag)}
           {@const count = summary[slotDef.tag] || 0}
-          <div
-            class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors
-              {tag === slotDef.tag
-                ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 font-semibold ring-1 ring-primary-300 dark:ring-primary-700'
-                : count > 0
-                  ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
-                  : 'bg-gray-50 dark:bg-gray-800 text-gray-400 dark:text-gray-600'}"
-            title="{slotDef.label}: {count} playlist{count !== 1 ? 's' : ''}{tag === slotDef.tag ? ' (active)' : ''}"
-          >
+          <div class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors {tag === slotDef.tag ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 font-semibold ring-1 ring-primary-300 dark:ring-primary-700' : count > 0 ? 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300' : 'bg-gray-50 dark:bg-gray-800 text-gray-400 dark:text-gray-600'}" title="{slotDef.label}: {count} playlist{count !== 1 ? 's' : ''}{tag === slotDef.tag ? ' (active)' : ''}">
             <span class="text-xs">{getTagEmoji(slotDef.tag)}</span>
             <span>{count}</span>
           </div>

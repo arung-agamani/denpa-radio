@@ -1,11 +1,8 @@
 <script lang="ts">
-  import type { Toast as ToastItem } from '../lib/stores';
-  import { createEventDispatcher } from 'svelte';
+  import type { Toast as ToastItem } from '$lib/stores';
   import { fade, fly } from 'svelte/transition';
 
-  export let toast: ToastItem;
-
-  const dispatch = createEventDispatcher();
+  let { toast, ondismiss }: { toast: ToastItem; ondismiss: () => void } = $props();
 
   const icons = {
     success: '✓',
@@ -28,10 +25,10 @@
     info: 'bg-blue-200 text-blue-600 dark:bg-blue-700 dark:text-blue-200',
   };
 
-  $: type = (toast.type || 'info') as ToastItem['type'];
-  $: colorClass = colors[type] || colors.info;
-  $: iconBgClass = iconBg[type] || iconBg.info;
-  $: icon = icons[type] || icons.info;
+  let type = $derived((toast.type || 'info') as ToastItem['type']);
+  let colorClass = $derived(colors[type] || colors.info);
+  let iconBgClass = $derived(iconBg[type] || iconBg.info);
+  let icon = $derived(icons[type] || icons.info);
 </script>
 
 <div
@@ -51,7 +48,7 @@
   <button
     type="button"
     class="flex-shrink-0 ml-2 inline-flex items-center justify-center w-6 h-6 rounded-full opacity-60 hover:opacity-100 transition-opacity focus:outline-none"
-    on:click={() => dispatch('dismiss')}
+    onclick={ondismiss}
     aria-label="Close"
   >
     <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 14 14">

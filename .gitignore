@@ -40,3 +40,11 @@ data/*.json.tmp
 # Frontend build artifacts
 web/node_modules/
 web/dist/
+web-backup
+
+# SvelteKit build artifacts
+web/.svelte-kit/
+web/build/
+
+# Opencode local development files
+.opencode

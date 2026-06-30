@@ -148,7 +148,7 @@ cd denpa-radio
 # 1. Build the web dashboard
 cd web
 bun install
-bun run build   # outputs to web/dist/
+bun run build   # outputs to web/build/
 cd ..
 
 # 2. Build the Go binary
@@ -169,7 +169,7 @@ All configuration is via environment variables:
 | `CHANNELS` | `2` | Audio channels (1=mono, 2=stereo) |
 | `MAX_CLIENTS` | `100` | Maximum concurrent listeners |
 | `PLAYLIST_FILE` | `./data/playlists.json` | Path to the playlist persistence file |
-| `WEB_DIR` | `./web/dist` | Path to the built web dashboard |
+| `WEB_DIR` | `./web/build` | Path to the built web dashboard |
 | `DJ_USERNAME` | `dj` | DJ dashboard login username |
 | `DJ_PASSWORD` | `denpa` | DJ dashboard login password |
 | `JWT_SECRET` | `change-me-in-production-please` | Secret key for signing JWT tokens |
