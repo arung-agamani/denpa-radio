@@ -9,6 +9,7 @@ import (
 	"github.com/arung-agamani/denpa-radio/config"
 	"github.com/arung-agamani/denpa-radio/internal/auth"
 	"github.com/arung-agamani/denpa-radio/internal/ffmpeg"
+	"github.com/arung-agamani/denpa-radio/internal/metadata"
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
 	"github.com/arung-agamani/denpa-radio/internal/radio/handler"
 	"github.com/arung-agamani/denpa-radio/internal/radio/service"
@@ -26,12 +27,14 @@ type Server struct {
 	broadcaster *Broadcaster
 	auth        *auth.Auth
 	httpServer  *http.Server
+	enricher    *metadata.Enricher
 
 	// Services
 	trackSvc    *service.TrackService
 	playlistSvc *service.PlaylistService
 	masterSvc   *service.MasterService
 	radioSvc    *service.RadioService
+	metadataSvc *service.MetadataService
 
 	// Route handlers
 	trackH    *handler.TrackHandlers
@@ -40,6 +43,7 @@ type Server struct {
 	radioH    *handler.RadioHandlers
 	authH     *handler.AuthHandlers
 	spaH      *handler.SPAHandler
+	metadataH *handler.MetadataHandlers
 }
 
 func NewServer(cfg *config.Config) *Server {
@@ -148,6 +152,14 @@ func NewServer(cfg *config.Config) *Server {
 	masterSvc := service.NewMasterService(master, store, scheduler)
 	radioSvc := service.NewRadioService(master, store, scheduler, broadcaster, cfg)
 
+	// --- Metadata enrichment ---
+	enricherCfg := metadata.DefaultConfig()
+	enricherCfg.MusicBrainzUserAgent = cfg.MusicBrainzUserAgent
+	enricherCfg.DiscogsAPIToken = cfg.DiscogsAPIToken
+	enricherCfg.EnrichmentEnabled = cfg.EnrichmentEnabled
+	enricher := metadata.NewEnricher(enricherCfg)
+	metadataSvc := service.NewMetadataService(master, store, enricher)
+
 	// --- Route handlers ---
 	trackH := handler.NewTrackHandlers(trackSvc)
 	playlistH := handler.NewPlaylistHandlers(playlistSvc)
@@ -155,6 +167,7 @@ func NewServer(cfg *config.Config) *Server {
 	radioH := handler.NewRadioHandlers(radioSvc)
 	authH := handler.NewAuthHandlers(authInstance)
 	spaH := handler.NewSPAHandler(cfg.WebDir)
+	metadataH := handler.NewMetadataHandlers(metadataSvc)
 
 	s := &Server{
 		config:      cfg,
@@ -163,16 +176,19 @@ func NewServer(cfg *config.Config) *Server {
 		scheduler:   scheduler,
 		broadcaster: broadcaster,
 		auth:        authInstance,
+		enricher:    enricher,
 		trackSvc:    trackSvc,
 		playlistSvc: playlistSvc,
 		masterSvc:   masterSvc,
 		radioSvc:    radioSvc,
+		metadataSvc: metadataSvc,
 		trackH:      trackH,
 		playlistH:   playlistH,
 		masterH:     masterH,
 		radioH:      radioH,
 		authH:       authH,
 		spaH:        spaH,
+		metadataH:   metadataH,
 	}
 
 	// --- Gin engine ---
@@ -228,6 +244,7 @@ func (s *Server) registerRoutes(engine *gin.Engine, authInstance *auth.Auth) {
 		api.GET("/tracks/search", s.trackH.Search)
 		api.GET("/tracks", s.trackH.List)
 		api.GET("/tracks/:id", s.trackH.GetByID)
+		api.GET("/tracks/:id/cover", s.metadataH.Cover) // album art
 
 		api.GET("/playlists", s.playlistH.List)
 		api.GET("/playlists/:id", s.playlistH.GetByID)
@@ -243,6 +260,10 @@ func (s *Server) registerRoutes(engine *gin.Engine, authInstance *auth.Auth) {
 		protected.DELETE("/tracks/:id", s.trackH.Delete)
 		protected.POST("/tracks/scan", s.trackH.Scan)
 		protected.POST("/tracks/upload", s.trackH.Upload)
+		protected.POST("/tracks/:id/enrich", s.metadataH.Enrich) // enrich single track
+
+		// Library management
+		protected.POST("/library/enrich", s.metadataH.EnrichAll) // batch enrich
 
 		// Playlist CRUD
 		protected.POST("/playlists", s.playlistH.Create)

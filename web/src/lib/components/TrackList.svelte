@@ -150,7 +150,7 @@
         <div class="px-3 {compact ? 'py-1.5' : 'py-3'} min-w-0">
           <p class="text-sm font-medium text-gray-900 dark:text-white truncate {isHighlighted ? 'text-primary-700 dark:text-primary-300' : ''}" title={track.title}>{track.title || 'Untitled'}</p>
           {#if track.artist}<p class="text-xs text-gray-500 dark:text-gray-400 truncate sm:hidden mt-0.5">{track.artist}</p>{/if}
-          {#if compact}<p class="text-xs text-gray-400 dark:text-gray-600 truncate mt-0.5" title={track.file_path}>{shortenPath(track.file_path)}</p>{/if}
+          {#if compact}<p class="text-xs text-gray-400 dark:text-gray-600 truncate mt-0.5" title={track.filePath}>{shortenPath(track.filePath)}</p>{/if}
         </div>
 
         <div class="px-3 {compact ? 'py-1.5' : 'py-3'} hidden sm:block min-w-0">

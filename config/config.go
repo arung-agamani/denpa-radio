@@ -18,7 +18,10 @@ type Config struct {
 	DJUsername   string
 	DJPassword   string
 	JWTSecret    string
-	Timezone     string
+	Timezone              string
+	EnrichmentEnabled     bool
+	MusicBrainzUserAgent  string
+	DiscogsAPIToken       string
 }
 
 func Load() *Config {
@@ -35,7 +38,10 @@ func Load() *Config {
 		DJUsername:   getEnv("DJ_USERNAME", "dj"),
 		DJPassword:   getEnv("DJ_PASSWORD", "denpa"),
 		JWTSecret:    getEnv("JWT_SECRET", "change-me-in-production-please"),
-		Timezone:     getEnv("TIMEZONE", ""),
+		Timezone:              getEnv("TIMEZONE", ""),
+		EnrichmentEnabled:     getEnvAsBool("ENRICHMENT_ENABLED", true),
+		MusicBrainzUserAgent:  getEnv("MUSICBRAINZ_USER_AGENT", "DenpaRadio/1.0 (https://github.com/arung-agamani/denpa-radio)"),
+		DiscogsAPIToken:       getEnv("DISCOGS_API_TOKEN", ""),
 	}
 }
 
@@ -50,6 +56,18 @@ func getEnvAsInt(name string, defaultVal int) int {
 	if valueStr, exists := os.LookupEnv(name); exists {
 		if value, err := strconv.Atoi(valueStr); err == nil {
 			return value
+		}
+	}
+	return defaultVal
+}
+
+func getEnvAsBool(name string, defaultVal bool) bool {
+	if valueStr, exists := os.LookupEnv(name); exists {
+		switch valueStr {
+		case "true", "1", "yes", "on":
+			return true
+		case "false", "0", "no", "off":
+			return false
 		}
 	}
 	return defaultVal

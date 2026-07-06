@@ -97,7 +97,7 @@
     editTrackAlbum = track.album || '';
     editTrackGenre = track.genre || '';
     editTrackYear = track.year ?? null;
-    editTrackNum = track.track_num ?? null;
+    editTrackNum = track.trackNum ?? null;
   }
 
   function cancelEditTrack() {
@@ -115,7 +115,7 @@
       updates.album = editTrackAlbum;
       updates.genre = editTrackGenre;
       if (editTrackYear !== null) updates.year = editTrackYear;
-      if (editTrackNum !== null) updates.track_num = editTrackNum;
+      if (editTrackNum !== null) updates.trackNum = editTrackNum;
       await updateTrack(editingTrackId, updates);
       toasts.success('Track metadata updated!');
       editingTrackId = null;
@@ -208,7 +208,7 @@
       </button>
     </div>
     <div class="p-5">
-      <TrackUpload onuploaded={(e) => { toasts.success(`Uploaded: ${e.track.title || e.track.file_path}`); loadAllTracks(); }} />
+      <TrackUpload onuploaded={(e) => { toasts.success(`Uploaded: ${e.track.title || e.track.filePath}`); loadAllTracks(); }} />
     </div>
   </div>
 {/if}

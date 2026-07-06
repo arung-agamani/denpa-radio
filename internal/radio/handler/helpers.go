@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -30,7 +31,16 @@ func sanitiseTrack(t *playlist.Track) map[string]interface{} {
 		"filePath": filepath.Base(t.FilePath),
 		"format":   t.Format,
 		"checksum": t.Checksum,
+		"coverUrl": coverURL(t),
 	}
+}
+
+// coverURL returns the API path for a track's cover art, or empty if none.
+func coverURL(t *playlist.Track) string {
+	if t == nil || t.CoverPath == "" {
+		return ""
+	}
+	return fmt.Sprintf("/api/tracks/%d/cover", t.ID)
 }
 
 // sanitiseTracks applies sanitiseTrack to a slice of tracks.

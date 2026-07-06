@@ -235,6 +235,22 @@
         )
       : addTrackList
   );
+
+  // Playlist track search
+  let playlistTrackSearch = $state('');
+  let playlistTracks = $derived((selectedPlaylist as Playlist | null)?.tracks ?? []);
+  let playlistTrackCount = $derived(playlistTracks.length);
+  let filteredPlaylistTracks = $derived(
+    playlistTrackSearch.trim()
+      ? playlistTracks.filter(
+          (t: Track) =>
+            (t.title || '').toLowerCase().includes(playlistTrackSearch.toLowerCase()) ||
+            (t.artist || '').toLowerCase().includes(playlistTrackSearch.toLowerCase()) ||
+            (t.album || '').toLowerCase().includes(playlistTrackSearch.toLowerCase())
+        )
+      : playlistTracks
+  );
+  let visibleTrackCount = $derived(filteredPlaylistTracks.length);
 </script>
 
 <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Playlists</h1>
@@ -362,7 +378,24 @@
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500"></div>
       </div>
     {:else}
-      <TrackList tracks={selectedPlaylist.tracks || []} editable={true} showIndex={true} showFormat={true} highlightChecksum={selectedPlaylist.currentTrackChecksum || ''} onremove={handleRemoveTrack} onmove={handleMoveTrack} />
+      <!-- Search within playlist -->
+      <div class="px-5 py-3 border-b border-gray-100 dark:border-gray-800">
+        <div class="flex items-center gap-3">
+          <div class="relative flex-1 max-w-md">
+            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>
+            <input
+              type="text"
+              placeholder="Search in this playlist..."
+              bind:value={playlistTrackSearch}
+              class="w-full pl-9 pr-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            />
+          </div>
+          <span class="text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap">
+            {visibleTrackCount} of {playlistTrackCount} track{playlistTrackCount !== 1 ? 's' : ''}
+          </span>
+        </div>
+      </div>
+      <TrackList tracks={filteredPlaylistTracks} editable={true} showIndex={true} showFormat={true} highlightChecksum={selectedPlaylist.currentTrackChecksum || ''} onremove={handleRemoveTrack} onmove={handleMoveTrack} />
     {/if}
   </div>
 {/if}

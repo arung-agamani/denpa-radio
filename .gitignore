@@ -11,6 +11,9 @@
 # Test binary, built with `go test -c`
 *.test
 
+# Built binary name on Linux (matches `go build -o denpa-radio .`)
+denpa-radio
+
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*

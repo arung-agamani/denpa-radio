@@ -37,12 +37,13 @@ Made with frustration <3
 
 ### Web Dashboard
 - **Now Playing Panel**: Displays currently playing track with title, artist, album, and live status.
-- **Tracks Management**: Browse, search, upload, edit metadata, and delete tracks.
+- **Library Browser**: Browse tracks by album, artist, or genre with cover art, inline metadata editing, and enrichment.
+- **Tracks Management**: Browse, search, upload, edit metadata, delete tracks, and reconcile with the filesystem.
 - **Playlists Management**: Create playlists, manage their track order, shuffle, import, and export.
 - **Master Playlist View**: Visualise and configure time-slot assignments.
 - **Scheduler Status**: See which time slot is active and what playlist is assigned to it.
 - **Import/Export**: Backup and restore playlists as JSON files.
-- **Built with Svelte + Flowbite**: Responsive SPA served directly by the Go binary.
+- **Built with SvelteKit + Svelte 5 + Flowbite**: Responsive SPA served directly by the Go binary.
 
 
 ## Architecture
@@ -118,11 +119,12 @@ denpa-radio/
 │           ├── radio.go
 │           └── track.go
 ├── music/                           # Audio file directory (configurable)
-└── web/                             # Svelte SPA (built output served by Go)
+└── web/                             # SvelteKit SPA (built output served by Go)
     └── src/
-        ├── components/              # Navbar, Player, NowPlaying, TrackList, …
-        ├── routes/                  # Public, Login, DJ dashboard sub-routes
-        └── lib/                     # API client, stores, router, auth helpers
+        ├── lib/
+        │   ├── components/          # Navbar, Player, NowPlaying, TrackList, AlbumCard, CoverArt, InlineTrackDetail, …
+        │   └── lib/                 # API client, stores, auth helpers
+        └── routes/                  # SvelteKit file-based routes: /, /login, /dj/*, /dj/library/*
 ```
 
 
@@ -174,6 +176,7 @@ All configuration is via environment variables:
 | `DJ_PASSWORD` | `denpa` | DJ dashboard login password |
 | `JWT_SECRET` | `change-me-in-production-please` | Secret key for signing JWT tokens |
 | `TIMEZONE` | *(system UTC)* | IANA timezone for time-based scheduling (e.g. `Asia/Tokyo`) |
+| `DISCOGS_API_TOKEN` | *(empty)* | Optional Discogs personal access token for metadata/cover-art enrichment |
 
 > **Important:** Always set `DJ_PASSWORD` and `JWT_SECRET` to strong values in production.
 
@@ -241,6 +244,7 @@ The stream responds with `Content-Type: audio/mpeg` and `Transfer-Encoding: chun
 | `GET` | `/api/tracks` | List all tracks in the library |
 | `GET` | `/api/tracks/search` | Search tracks by title/artist/album |
 | `GET` | `/api/tracks/:id` | Get a single track |
+| `GET` | `/api/tracks/:id/cover` | Get a track's album cover art |
 | `GET` | `/api/playlists` | List all playlists |
 | `GET` | `/api/playlists/:id` | Get a single playlist |
 | `POST` | `/api/auth/login` | Log in and receive a JWT |
@@ -255,6 +259,8 @@ The stream responds with `Content-Type: audio/mpeg` and `Transfer-Encoding: chun
 | `GET` | `/api/tracks/orphaned` | List tracks with missing files |
 | `PUT` | `/api/tracks/:id` | Update track metadata |
 | `DELETE` | `/api/tracks/:id` | Remove a track from the library |
+| `POST` | `/api/tracks/:id/enrich` | Enrich track metadata/cover art |
+| `POST` | `/api/library/enrich` | Batch-enrich library metadata/cover art |
 | `POST` | `/api/playlists` | Create a new playlist |
 | `PUT` | `/api/playlists/:id` | Update playlist name/settings |
 | `DELETE` | `/api/playlists/:id` | Delete a playlist |

@@ -12,19 +12,23 @@ import (
 	"github.com/dhowden/tag"
 )
 
+// coversDir is the subdirectory under the data directory where album art is cached.
+const coversDir = "data/covers"
+
 // Track represents a single audio file with its metadata.
 type Track struct {
-	ID       int64  `json:"id"`
-	Title    string `json:"title"`
-	Artist   string `json:"artist,omitempty"`
-	Album    string `json:"album,omitempty"`
-	Genre    string `json:"genre,omitempty"`
-	Year     int    `json:"year,omitempty"`
-	TrackNum int    `json:"trackNum,omitempty"`
-	Duration int    `json:"duration"` // in seconds
-	FilePath string `json:"filePath"`
-	Format   string `json:"format"`
-	Checksum string `json:"checksum"`
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	Artist    string `json:"artist,omitempty"`
+	Album     string `json:"album,omitempty"`
+	Genre     string `json:"genre,omitempty"`
+	Year      int    `json:"year,omitempty"`
+	TrackNum  int    `json:"trackNum,omitempty"`
+	Duration  int    `json:"duration"` // in seconds
+	FilePath  string `json:"filePath"`
+	Format    string `json:"format"`
+	Checksum  string `json:"checksum"`
+	CoverPath string `json:"coverPath,omitempty"` // relative path to cached album art
 }
 
 // SupportedFormats lists the audio file extensions that are recognized.
@@ -78,19 +82,20 @@ func NewTrackFromFile(path string) (*Track, error) {
 
 // NewTrackFromExisting creates a Track with all fields pre-populated. This is
 // used when loading from persisted data where metadata is already known.
-func NewTrackFromExisting(id int64, title, artist, album, genre string, year, trackNum, duration int, filePath, format, checksum string) *Track {
+func NewTrackFromExisting(id int64, title, artist, album, genre string, year, trackNum, duration int, filePath, format, checksum, coverPath string) *Track {
 	return &Track{
-		ID:       id,
-		Title:    title,
-		Artist:   artist,
-		Album:    album,
-		Genre:    genre,
-		Year:     year,
-		TrackNum: trackNum,
-		Duration: duration,
-		FilePath: filePath,
-		Format:   format,
-		Checksum: checksum,
+		ID:        id,
+		Title:     title,
+		Artist:    artist,
+		Album:     album,
+		Genre:     genre,
+		Year:      year,
+		TrackNum:  trackNum,
+		Duration:  duration,
+		FilePath:  filePath,
+		Format:    format,
+		Checksum:  checksum,
+		CoverPath: coverPath,
 	}
 }
 
@@ -145,6 +150,48 @@ func extractTrackMetadata(track *Track, path string) {
 	if num, _ := m.Track(); num != 0 {
 		track.TrackNum = num
 	}
+
+	// Extract embedded album art.
+	if pic := m.Picture(); pic != nil {
+		if coverPath := saveCoverArt(track.Checksum, pic); coverPath != "" {
+			track.CoverPath = coverPath
+		}
+	}
+}
+
+// saveCoverArt writes the embedded cover art image to disk under data/covers/
+// and returns the relative path. Returns empty string on failure.
+func saveCoverArt(checksum string, pic *tag.Picture) string {
+	ext := ".jpg"
+	switch pic.Ext {
+	case "png":
+		ext = ".png"
+	case "gif":
+		ext = ".gif"
+	case "webp":
+		ext = ".webp"
+	}
+
+	dir := coversDir
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Warn("Could not create covers directory", "dir", dir, "error", err)
+		return ""
+	}
+
+	filename := checksum + ext
+	path := filepath.Join(dir, filename)
+
+	if _, err := os.Stat(path); err == nil {
+		// Already cached.
+		return path
+	}
+
+	if err := os.WriteFile(path, pic.Data, 0o644); err != nil {
+		slog.Warn("Could not save cover art", "path", path, "error", err)
+		return ""
+	}
+
+	return path
 }
 
 // FileExists returns true if the track's file path points to an existing file.

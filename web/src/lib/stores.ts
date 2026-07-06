@@ -300,3 +300,60 @@ export const djActiveSection = writable<string>("dashboard");
 
 // Whether the audio player is currently playing.
 export const isPlaying = writable<boolean>(false);
+
+// ---------------------------------------------------------------------------
+// Library v2 — grouped track views
+//
+// These are derived from trackLibrary: they aggregate all tracks into
+// album / artist / genre maps for the new browse views.
+// ---------------------------------------------------------------------------
+
+/** A grouping entry with its tracks and derived metadata. */
+export interface GroupEntry {
+    key: string;
+    tracks: Track[];
+    count: number;
+    // Derived from first track with non-empty value.
+    artist?: string;
+    album?: string;
+    genre?: string;
+    year?: number;
+    coverUrl?: string;
+}
+
+function groupBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {
+    const map = new Map<string, T[]>();
+    for (const item of items) {
+        const key = keyFn(item) || 'Unknown';
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push(item);
+    }
+    return map;
+}
+
+function toGroupEntries(map: Map<string, Track[]>): GroupEntry[] {
+    return Array.from(map.entries())
+        .map(([key, tracks]) => ({
+            key,
+            tracks,
+            count: tracks.length,
+            artist: tracks.find(t => t.artist)?.artist,
+            album: tracks.find(t => t.album)?.album,
+            genre: tracks.find(t => t.genre)?.genre,
+            year: tracks.find(t => t.year)?.year,
+            coverUrl: tracks.find(t => t.coverUrl)?.coverUrl,
+        }))
+        .sort((a, b) => a.key.localeCompare(b.key));
+}
+
+export const tracksByAlbum = derived(trackLibrary, ($tracks) => {
+    return toGroupEntries(groupBy($tracks, (t) => t.album || 'Unknown Album'));
+});
+
+export const tracksByArtist = derived(trackLibrary, ($tracks) => {
+    return toGroupEntries(groupBy($tracks, (t) => t.artist || 'Unknown Artist'));
+});
+
+export const tracksByGenre = derived(trackLibrary, ($tracks) => {
+    return toGroupEntries(groupBy($tracks, (t) => t.genre || 'Unknown Genre'));
+});

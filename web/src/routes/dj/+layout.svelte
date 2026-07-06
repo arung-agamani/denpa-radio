@@ -9,9 +9,10 @@
 
   const sections = [
     { id: 'dashboard', label: 'Dashboard', icon: '📊', href: '/dj' },
+    { id: 'library', label: 'Library', icon: '📚', href: '/dj/library/albums' },
     { id: 'playlists', label: 'Playlists', icon: '🎵', href: '/dj/playlists' },
     { id: 'master', label: 'Master Playlist', icon: '🕐', href: '/dj/master' },
-    { id: 'tracks', label: 'Track Library', icon: '📚', href: '/dj/tracks' },
+    { id: 'tracks', label: 'Track Library (legacy)', icon: '🗃️', href: '/dj/tracks' },
     { id: 'importexport', label: 'Import / Export', icon: '📦', href: '/dj/import-export' },
   ];
 
