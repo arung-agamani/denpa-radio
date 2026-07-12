@@ -261,6 +261,8 @@ The stream responds with `Content-Type: audio/mpeg` and `Transfer-Encoding: chun
 | `DELETE` | `/api/tracks/:id` | Remove a track from the library |
 | `POST` | `/api/tracks/:id/enrich` | Enrich track metadata/cover art |
 | `POST` | `/api/library/enrich` | Batch-enrich library metadata/cover art |
+| `POST` | `/api/library/batch-update` | Batch-update track metadata by album/artist/genre |
+| `POST` | `/api/library/batch-cover` | Batch-update cover art by album/artist/genre |
 | `POST` | `/api/playlists` | Create a new playlist |
 | `PUT` | `/api/playlists/:id` | Update playlist name/settings |
 | `DELETE` | `/api/playlists/:id` | Delete a playlist |

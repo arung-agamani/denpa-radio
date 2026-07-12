@@ -13,6 +13,7 @@ import (
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
 	"github.com/arung-agamani/denpa-radio/internal/radio/handler"
 	"github.com/arung-agamani/denpa-radio/internal/radio/service"
+	jsonadapter "github.com/arung-agamani/denpa-radio/internal/repository/json"
 	"github.com/gin-gonic/gin"
 )
 
@@ -21,8 +22,7 @@ import (
 // http.Server.
 type Server struct {
 	config      *config.Config
-	master      *playlist.MasterPlaylist
-	store       *playlist.Store
+	repos       *jsonadapter.JSONAdapter
 	scheduler   *playlist.Scheduler
 	broadcaster *Broadcaster
 	auth        *auth.Auth
@@ -39,30 +39,31 @@ type Server struct {
 	// Route handlers
 	trackH    *handler.TrackHandlers
 	playlistH *handler.PlaylistHandlers
-	masterH   *handler.MasterHandlers
 	radioH    *handler.RadioHandlers
+	libraryH  *handler.LibraryHandlers
+	timezoneH *handler.TimezoneHandlers
 	authH     *handler.AuthHandlers
 	spaH      *handler.SPAHandler
-	metadataH *handler.MetadataHandlers
 }
 
 func NewServer(cfg *config.Config) *Server {
-	// --- Playlist store / master initialisation ---
+	// --- Playlist store / adapter initialisation ---
 	store, err := playlist.NewStore(cfg.PlaylistFile)
 	if err != nil {
 		slog.Error("Failed to create playlist store", "error", err)
 		panic(err)
 	}
 
+	adapter := jsonadapter.NewJSONAdapter(store)
+
 	var master *playlist.MasterPlaylist
 
 	if store.Exists() {
-		master, err = store.Load()
-		if err != nil {
-			slog.Warn("Failed to load saved playlists, will create default", "error", err)
-			master = nil
+		if loadErr := adapter.Load(); loadErr != nil {
+			slog.Warn("Failed to load saved playlists, will create default", "error", loadErr)
 		} else {
 			slog.Info("Loaded saved playlists from disk")
+			master = adapter.Master()
 		}
 	}
 
@@ -98,6 +99,13 @@ func NewServer(cfg *config.Config) *Server {
 		if saveErr := store.Save(master); saveErr != nil {
 			slog.Error("Failed to save initial playlist", "error", saveErr)
 		}
+
+		// Sync adapter with the newly created master so services and
+		// broadcaster share the same in-memory object.
+		if loadErr := adapter.Load(); loadErr != nil {
+			slog.Error("Failed to sync adapter after initial save", "error", loadErr)
+		}
+		master = adapter.Master()
 	} else {
 		if master.Library != nil {
 			_, added, scanErr := playlist.ScanIntoLibrary(cfg.MusicDir, master.Library)
@@ -108,7 +116,7 @@ func NewServer(cfg *config.Config) *Server {
 					"newly_added", added,
 					"library_total", master.Library.Count(),
 				)
-				if saveErr := store.Save(master); saveErr != nil {
+				if saveErr := adapter.Save(); saveErr != nil {
 					slog.Error("Failed to save after startup scan", "error", saveErr)
 				}
 			}
@@ -147,10 +155,10 @@ func NewServer(cfg *config.Config) *Server {
 	}, 1*time.Minute)
 
 	// --- Services ---
-	trackSvc := service.NewTrackService(master, store, cfg, encoder)
-	playlistSvc := service.NewPlaylistService(master, store, cfg)
-	masterSvc := service.NewMasterService(master, store, scheduler)
-	radioSvc := service.NewRadioService(master, store, scheduler, broadcaster, cfg)
+	trackSvc := service.NewTrackService(adapter, adapter, cfg, encoder)
+	playlistSvc := service.NewPlaylistService(adapter, adapter, cfg)
+	masterSvc := service.NewMasterService(adapter, scheduler)
+	radioSvc := service.NewRadioService(adapter, scheduler, broadcaster, cfg)
 
 	// --- Metadata enrichment ---
 	enricherCfg := metadata.DefaultConfig()
@@ -158,21 +166,23 @@ func NewServer(cfg *config.Config) *Server {
 	enricherCfg.DiscogsAPIToken = cfg.DiscogsAPIToken
 	enricherCfg.EnrichmentEnabled = cfg.EnrichmentEnabled
 	enricher := metadata.NewEnricher(enricherCfg)
-	metadataSvc := service.NewMetadataService(master, store, enricher)
+	metadataSvc := service.NewMetadataService(adapter, adapter, enricher)
+
+	// --- Library service (delegator) ---
+	librarySvc := service.NewLibraryService(trackSvc, radioSvc, metadataSvc)
 
 	// --- Route handlers ---
-	trackH := handler.NewTrackHandlers(trackSvc)
-	playlistH := handler.NewPlaylistHandlers(playlistSvc)
-	masterH := handler.NewMasterHandlers(masterSvc)
+	trackH := handler.NewTrackHandlers(trackSvc, metadataSvc)
+	playlistH := handler.NewPlaylistHandlers(playlistSvc, masterSvc)
 	radioH := handler.NewRadioHandlers(radioSvc)
+	libraryH := handler.NewLibraryHandlers(librarySvc)
+	timezoneH := handler.NewTimezoneHandlers(radioSvc)
 	authH := handler.NewAuthHandlers(authInstance)
 	spaH := handler.NewSPAHandler(cfg.WebDir)
-	metadataH := handler.NewMetadataHandlers(metadataSvc)
 
 	s := &Server{
 		config:      cfg,
-		master:      master,
-		store:       store,
+		repos:       adapter,
 		scheduler:   scheduler,
 		broadcaster: broadcaster,
 		auth:        authInstance,
@@ -184,11 +194,11 @@ func NewServer(cfg *config.Config) *Server {
 		metadataSvc: metadataSvc,
 		trackH:      trackH,
 		playlistH:   playlistH,
-		masterH:     masterH,
 		radioH:      radioH,
+		libraryH:    libraryH,
+		timezoneH:   timezoneH,
 		authH:       authH,
 		spaH:        spaH,
-		metadataH:   metadataH,
 	}
 
 	// --- Gin engine ---
@@ -197,7 +207,21 @@ func NewServer(cfg *config.Config) *Server {
 	engine.Use(gin.Recovery())
 	engine.Use(SecurityHeadersMiddleware())
 
-	s.registerRoutes(engine, authInstance)
+	// Streaming is registered here because StreamHandler lives in the radio
+	// package and cannot be imported by handler (would create a cycle).
+	streamHandler := NewStreamHandler(s.broadcaster, s.config.StationName, s.config.MaxClients)
+	engine.GET("/stream", gin.WrapH(streamHandler))
+
+	deps := handler.HandlerDeps{
+		TrackH:    trackH,
+		PlaylistH: playlistH,
+		RadioH:    radioH,
+		LibraryH:  libraryH,
+		TimezoneH: timezoneH,
+		AuthH:     authH,
+		SpaH:      spaH,
+	}
+	handler.RegisterRoutes(engine, AuthRequired(authInstance), deps)
 
 	s.httpServer = &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -209,98 +233,6 @@ func NewServer(cfg *config.Config) *Server {
 	}
 
 	return s
-}
-
-// registerRoutes wires all routes onto the gin engine.
-func (s *Server) registerRoutes(engine *gin.Engine, authInstance *auth.Auth) {
-	streamHandler := NewStreamHandler(s.broadcaster, s.config.StationName, s.config.MaxClients)
-
-	// --- Streaming (no auth) ---
-	engine.GET("/stream", gin.WrapH(streamHandler))
-
-	// --- Public non-API ---
-	engine.GET("/health", s.radioH.Health)
-	engine.GET("/status", s.radioH.Status)           // legacy
-	engine.GET("/playlist", s.radioH.LegacyPlaylist) // legacy
-
-	// --- Auth ---
-	authGroup := engine.Group("/api/auth")
-	{
-		authGroup.POST("/login", s.authH.Login)
-		authGroup.GET("/verify", AuthRequired(authInstance), s.authH.VerifyToken)
-	}
-
-	// --- Public API ---
-	api := engine.Group("/api")
-	{
-		api.GET("/status", s.radioH.Status)
-		api.GET("/scheduler/status", s.radioH.SchedulerStatus)
-		api.GET("/timezone", s.radioH.GetTimezone)
-		api.GET("/master", s.masterH.Get)
-		api.GET("/queue", s.radioH.GetQueue)
-		api.GET("/timeslots", s.masterH.GetTimeSlots)
-
-		// Literal sub-paths registered before :id to avoid routing conflicts.
-		api.GET("/tracks/search", s.trackH.Search)
-		api.GET("/tracks", s.trackH.List)
-		api.GET("/tracks/:id", s.trackH.GetByID)
-		api.GET("/tracks/:id/cover", s.metadataH.Cover) // album art
-
-		api.GET("/playlists", s.playlistH.List)
-		api.GET("/playlists/:id", s.playlistH.GetByID)
-	}
-
-	// --- Protected API (JWT required) ---
-	protected := engine.Group("/api")
-	protected.Use(AuthRequired(authInstance))
-	{
-		// Track management
-		protected.GET("/tracks/orphaned", s.trackH.ListOrphaned)
-		protected.PUT("/tracks/:id", s.trackH.Update)
-		protected.DELETE("/tracks/:id", s.trackH.Delete)
-		protected.POST("/tracks/scan", s.trackH.Scan)
-		protected.POST("/tracks/upload", s.trackH.Upload)
-		protected.POST("/tracks/:id/enrich", s.metadataH.Enrich) // enrich single track
-
-		// Library management
-		protected.POST("/library/enrich", s.metadataH.EnrichAll) // batch enrich
-
-		// Playlist CRUD
-		protected.POST("/playlists", s.playlistH.Create)
-		protected.PUT("/playlists/:id", s.playlistH.Update)
-		protected.DELETE("/playlists/:id", s.playlistH.Delete)
-
-		// Playlist track manipulation
-		protected.POST("/playlists/:id/tracks", s.playlistH.AddTrack)
-		protected.DELETE("/playlists/:id/tracks/:trackId", s.playlistH.RemoveTrack)
-		protected.POST("/playlists/:id/tracks/move", s.playlistH.MoveTrack)
-		protected.POST("/playlists/:id/shuffle", s.playlistH.Shuffle)
-
-		// Playlist export / import
-		protected.GET("/playlists/:id/export", s.playlistH.Export)
-		protected.POST("/playlists/import", s.playlistH.Import)
-
-		// Master playlist tag management
-		protected.PUT("/master/:tag", s.masterH.AssignPlaylistToTag)
-		protected.DELETE("/master/:tag/:playlistId", s.masterH.RemovePlaylistFromTag)
-
-		// Time slot configuration
-		protected.PUT("/timeslots", s.masterH.SetTimeSlots)
-
-		// Reconcile & timezone
-		protected.POST("/reconcile", s.radioH.Reconcile)
-		protected.PUT("/timezone", s.radioH.SetTimezone)
-
-		// Skip controls
-		protected.POST("/skip/next", s.radioH.SkipNext)
-		protected.POST("/skip/prev", s.radioH.SkipPrev)
-
-		// Legacy protected reload
-		protected.POST("/playlist/reload", s.radioH.LegacyReload)
-	}
-
-	// --- SPA fallback (must be last) ---
-	engine.NoRoute(s.spaH.Handle)
 }
 
 // Start launches the scheduler, broadcaster, and HTTP server. It blocks until

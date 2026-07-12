@@ -1,13 +1,14 @@
 package handler
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/arung-agamani/denpa-radio/internal/apierror"
+	"github.com/arung-agamani/denpa-radio/internal/apiresponse"
 	"github.com/gin-gonic/gin"
 )
 
@@ -29,7 +30,7 @@ const fallbackPage = "200.html"
 func (h *SPAHandler) Handle(c *gin.Context) {
 	absWebDir, err := filepath.Abs(h.webDir)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "server configuration error"})
+		apiresponse.Error(c, apierror.ErrInternal("server configuration error"))
 		return
 	}
 
@@ -55,12 +56,7 @@ func (h *SPAHandler) Handle(c *gin.Context) {
 	fallbackPath := filepath.Join(absWebDir, fallbackPage)
 	if _, err := os.Stat(fallbackPath); err != nil {
 		slog.Warn("Frontend not built", "webDir", h.webDir)
-		c.Header("Content-Type", "application/json")
-		c.Status(http.StatusNotFound)
-		json.NewEncoder(c.Writer).Encode(map[string]string{
-			"status": "error",
-			"error":  "Frontend not built. Run 'bun run build' in the web/ directory.",
-		})
+		apiresponse.Error(c, apierror.ErrInternal("Frontend not built. Run 'bun run build' in the web/ directory."))
 		return
 	}
 

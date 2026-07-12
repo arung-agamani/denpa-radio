@@ -1,12 +1,15 @@
 package service
 
 import (
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"time"
 
 	"github.com/arung-agamani/denpa-radio/config"
+	"github.com/arung-agamani/denpa-radio/internal/apierror"
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
+	"github.com/arung-agamani/denpa-radio/internal/repository"
 )
 
 // Broadcaster is the minimal interface the RadioService needs from the
@@ -63,32 +66,23 @@ type ReconcileResult struct {
 // RadioService implements business logic for station status, scheduler
 // monitoring, timezone management, and reconciliation.
 type RadioService struct {
-	master      *playlist.MasterPlaylist
-	store       *playlist.Store
+	master      repository.MasterPlaylistRepository
 	scheduler   *playlist.Scheduler
 	broadcaster Broadcaster
 	cfg         *config.Config
 }
 
 func NewRadioService(
-	master *playlist.MasterPlaylist,
-	store *playlist.Store,
+	master repository.MasterPlaylistRepository,
 	scheduler *playlist.Scheduler,
 	broadcaster Broadcaster,
 	cfg *config.Config,
 ) *RadioService {
 	return &RadioService{
 		master:      master,
-		store:       store,
 		scheduler:   scheduler,
 		broadcaster: broadcaster,
 		cfg:         cfg,
-	}
-}
-
-func (s *RadioService) save() {
-	if err := s.store.Save(s.master); err != nil {
-		slog.Error("Failed to save playlist state", "error", err)
 	}
 }
 
@@ -111,8 +105,9 @@ func (s *RadioService) Status() StatusSnapshot {
 
 	var currentTrackRaw *playlist.Track
 	if currentTrackPath != "" {
-		if s.master.Library != nil {
-			currentTrackRaw = s.master.Library.GetByFilePath(currentTrackPath)
+		lib := s.master.Library()
+		if lib != nil {
+			currentTrackRaw = lib.GetByFilePath(currentTrackPath)
 		}
 		if currentTrackRaw == nil {
 			for _, pl := range s.master.AllPlaylists() {
@@ -185,7 +180,9 @@ func (s *RadioService) SetTimezone(tz string) (resolvedTZ, serverTime string, ac
 		return
 	}
 	s.scheduler.ForceCheck()
-	s.save()
+	if err = s.master.Save(); err != nil {
+		slog.Error("failed to save playlist state", "error", err)
+	}
 
 	loc := s.master.Location()
 	resolvedTZ = s.master.Timezone()
@@ -227,10 +224,34 @@ func (s *RadioService) SkipPrev() error {
 // Reconcile scans the music directory, removes stale tracks, auto-adds
 // orphaned tracks to the active playlist, and persists state.
 func (s *RadioService) Reconcile() (ReconcileResult, error) {
-	orphaned, removedCount, err := playlist.ReconcileTracks(s.cfg.MusicDir, s.master)
-	if err != nil {
-		return ReconcileResult{}, err
+	lib := s.master.Library()
+	if lib == nil {
+		return ReconcileResult{}, apierror.ErrInternal("track library not initialised")
 	}
+
+	stale := lib.RemoveStale()
+	removedCount := len(stale)
+	for _, t := range stale {
+		s.master.RemoveTrackFromAll(t.Checksum)
+	}
+	if removedCount > 0 {
+		slog.Info("Removed stale tracks from library and playlists", "count", removedCount)
+	}
+
+	orphaned, err := playlist.FindOrphanedTracksFromLibrary(s.cfg.MusicDir, lib)
+	if err != nil {
+		return ReconcileResult{}, fmt.Errorf("failed to find orphaned tracks: %w", err)
+	}
+
+	// Add orphaned tracks to the library so they get stable IDs.
+	if len(orphaned) > 0 {
+		for i, t := range orphaned {
+			canonical := lib.AddOrUpdate(t)
+			orphaned[i] = canonical
+		}
+		slog.Info("Added orphaned tracks to library", "count", len(orphaned))
+	}
+
 	if len(orphaned) > 0 {
 		activePl, plErr := s.master.ActivePlaylist()
 		if plErr == nil && activePl != nil {
@@ -241,7 +262,9 @@ func (s *RadioService) Reconcile() (ReconcileResult, error) {
 			)
 		}
 	}
-	s.save()
+	if err := s.master.Save(); err != nil {
+		slog.Error("failed to save playlist state", "error", err)
+	}
 	return ReconcileResult{
 		RemovedCount:  removedCount,
 		OrphanedCount: len(orphaned),

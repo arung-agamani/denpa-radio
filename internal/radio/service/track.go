@@ -10,95 +10,239 @@ import (
 	"strings"
 
 	"github.com/arung-agamani/denpa-radio/config"
+	"github.com/arung-agamani/denpa-radio/internal/apierror"
 	"github.com/arung-agamani/denpa-radio/internal/ffmpeg"
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
+	"github.com/arung-agamani/denpa-radio/internal/repository"
 )
 
 // TrackService implements the business logic for track library operations.
 type TrackService struct {
-	master  *playlist.MasterPlaylist
-	store   *playlist.Store
+	tracks  repository.TrackRepository
+	master  repository.MasterPlaylistRepository
 	cfg     *config.Config
 	encoder *ffmpeg.Encoder
 }
 
-func NewTrackService(master *playlist.MasterPlaylist, store *playlist.Store, cfg *config.Config, encoder *ffmpeg.Encoder) *TrackService {
-	return &TrackService{master: master, store: store, cfg: cfg, encoder: encoder}
-}
-
-func (s *TrackService) save() {
-	if err := s.store.Save(s.master); err != nil {
-		slog.Error("Failed to save playlist state", "error", err)
-	}
+func NewTrackService(tracks repository.TrackRepository, master repository.MasterPlaylistRepository, cfg *config.Config, encoder *ffmpeg.Encoder) *TrackService {
+	return &TrackService{tracks: tracks, master: master, cfg: cfg, encoder: encoder}
 }
 
 // List returns all tracks from the library, or deduplicated from all playlists
 // if the library is not initialised.
 func (s *TrackService) List() []*playlist.Track {
-	if s.master.Library != nil {
-		return s.master.Library.List()
+	lib := s.master.Library()
+	if lib != nil {
+		return s.tracks.List()
 	}
 	return s.master.AllTracksDeduped()
 }
 
 // GetByID returns a single track by its numeric ID.
 func (s *TrackService) GetByID(id int64) (*playlist.Track, error) {
-	if s.master.Library != nil {
-		if t := s.master.Library.GetByID(id); t != nil {
-			return t, nil
-		}
+	if t := s.tracks.GetByID(id); t != nil {
+		return t, nil
 	}
 	for _, pl := range s.master.AllPlaylists() {
 		if t, _, err := pl.FindTrackByID(id); err == nil {
 			return t, nil
 		}
 	}
-	return nil, fmt.Errorf("track %d not found", id)
+	return nil, apierror.ErrNotFound(fmt.Sprintf("track %d not found", id))
 }
 
 // Search returns tracks matching the query string.
 func (s *TrackService) Search(q string) ([]*playlist.Track, error) {
-	if s.master.Library == nil {
-		return nil, fmt.Errorf("track library not initialised")
+	if s.master.Library() == nil {
+		return nil, apierror.ErrInternal("track library not initialised")
 	}
-	return s.master.Library.Search(q), nil
+	return s.tracks.Search(q), nil
 }
 
 // ListOrphaned returns tracks present on disk but not registered in any playlist.
 func (s *TrackService) ListOrphaned() ([]*playlist.Track, error) {
-	return playlist.FindOrphanedTracks(s.cfg.MusicDir, s.master)
+	lib := s.master.Library()
+	if lib == nil {
+		return nil, apierror.ErrInternal("track library not initialised")
+	}
+	return playlist.FindOrphanedTracksFromLibrary(s.cfg.MusicDir, lib)
 }
 
 // Update modifies the metadata of a library track by ID.
 func (s *TrackService) Update(id int64, upd playlist.TrackUpdate) (*playlist.Track, error) {
-	if s.master.Library == nil {
-		return nil, fmt.Errorf("track library not initialised")
+	if s.master.Library() == nil {
+		return nil, apierror.ErrInternal("track library not initialised")
 	}
-	track, err := s.master.Library.Update(id, upd)
+	track, err := s.tracks.Update(id, upd)
 	if err != nil {
 		return nil, err
 	}
 	slog.Info("Track metadata updated", "track_id", id, "title", track.Title)
-	s.save()
+	if err := s.master.Save(); err != nil {
+		slog.Error("failed to save playlist state", "error", err)
+	}
 	return track, nil
+}
+
+// BatchUpdate applies metadata changes to all tracks matching the filter.
+func (s *TrackService) BatchUpdate(filter playlist.TrackFilter, upd playlist.TrackUpdate) (int, error) {
+	if s.master.Library() == nil {
+		return 0, apierror.ErrInternal("track library not initialised")
+	}
+	updated, err := s.tracks.BatchUpdate(filter, upd)
+	if err != nil {
+		return 0, err
+	}
+	if updated > 0 {
+		if err := s.master.Save(); err != nil {
+			slog.Error("failed to save playlist state", "error", err)
+		}
+	}
+	return updated, nil
+}
+
+// BatchUpdateCover saves the uploaded image and applies its path to all tracks
+// matching the filter.
+func (s *TrackService) BatchUpdateCover(filter playlist.TrackFilter, r io.Reader, filename string) (int, error) {
+	if s.master.Library() == nil {
+		return 0, apierror.ErrInternal("track library not initialised")
+	}
+
+	ext := filepath.Ext(filename)
+	if ext == "" {
+		ext = ".jpg"
+	}
+	coverFilename := coverFilenameForFilter(filter) + ext
+	coversDir := filepath.Join("data", "covers")
+	if err := os.MkdirAll(coversDir, 0o755); err != nil {
+		return 0, fmt.Errorf("failed to create covers directory: %w", err)
+	}
+	coverPath := filepath.Join(coversDir, coverFilename)
+
+	f, err := os.Create(coverPath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create cover file: %w", err)
+	}
+	if _, err := io.Copy(f, r); err != nil {
+		f.Close()
+		return 0, fmt.Errorf("failed to write cover file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return 0, fmt.Errorf("failed to close cover file: %w", err)
+	}
+
+	updated, err := s.tracks.BatchSetCover(filter, coverPath)
+	if err != nil {
+		return 0, err
+	}
+	if updated > 0 {
+		if err := s.master.Save(); err != nil {
+			slog.Error("failed to save playlist state", "error", err)
+		}
+	}
+	return updated, nil
+}
+
+type RefreshMetadataResult struct {
+	Total   int `json:"total"`
+	Probed  int `json:"probed"`
+	Updated int `json:"updated"`
+	Failed  int `json:"failed"`
+}
+
+// RefreshMetadata probes every library track via ffprobe to discover duration.
+// Tracks that already have Duration > 0 are skipped. The store is saved once at
+// the end.
+func (s *TrackService) RefreshMetadata() (*RefreshMetadataResult, error) {
+	if s.master.Library() == nil {
+		return nil, apierror.ErrInternal("track library not initialised")
+	}
+
+	tracks := s.tracks.List()
+	changed := false
+	result := &RefreshMetadataResult{Total: len(tracks)}
+
+	for _, t := range tracks {
+		if t.Duration > 0 {
+			continue
+		}
+		result.Probed++
+		dur := ffmpeg.ProbeDuration(t.FilePath)
+		if dur > 0 {
+			t.Duration = dur
+			changed = true
+			result.Updated++
+		} else {
+			result.Failed++
+		}
+	}
+
+	if changed {
+		if err := s.master.Save(); err != nil {
+			slog.Error("failed to save playlist state", "error", err)
+		}
+	}
+	slog.Info("Metadata refresh complete",
+		"total", result.Total,
+		"probed", result.Probed,
+		"updated", result.Updated,
+		"failed", result.Failed,
+	)
+	return result, nil
+}
+
+func coverFilenameForFilter(filter playlist.TrackFilter) string {
+	parts := make([]string, 0, 2)
+	if filter.Artist != "" {
+		parts = append(parts, sanitizeFileName(filter.Artist))
+	}
+	if filter.Album != "" {
+		parts = append(parts, sanitizeFileName(filter.Album))
+	}
+	if filter.Genre != "" {
+		parts = append(parts, sanitizeFileName(filter.Genre))
+	}
+	if len(parts) == 0 {
+		return "cover"
+	}
+	return strings.Join(parts, "_")
+}
+
+func sanitizeFileName(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+			b.WriteByte(c)
+		} else if c == ' ' || c == '.' {
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "unknown"
+	}
+	return b.String()
 }
 
 // Delete removes a track from the library and every playlist it appears in.
 // When deleteFromDisk is true the underlying audio file is also removed.
 // Returns the number of playlist positions that were removed.
 func (s *TrackService) Delete(id int64, deleteFromDisk bool) (playlistRemovals int, err error) {
-	if s.master.Library == nil {
-		return 0, fmt.Errorf("track library not initialised")
+	if s.master.Library() == nil {
+		return 0, apierror.ErrInternal("track library not initialised")
 	}
-	track := s.master.Library.GetByID(id)
+	track := s.tracks.GetByID(id)
 	if track == nil {
-		return 0, fmt.Errorf("track %d not found in library", id)
-	}
+	return 0, apierror.ErrNotFound(fmt.Sprintf("track %d not found in library", id))
+}
 
 	filePath := track.FilePath
 
 	playlistRemovals = s.master.RemoveTrackFromAll(track.Checksum)
-	s.master.Library.RemoveByID(id)
+	s.tracks.RemoveByID(id)
 
 	var fileDeleted bool
 	if deleteFromDisk && filePath != "" {
@@ -118,30 +262,32 @@ func (s *TrackService) Delete(id int64, deleteFromDisk bool) (playlistRemovals i
 		"playlist_removals", playlistRemovals,
 		"file_deleted", fileDeleted,
 	)
-	s.save()
+	if err := s.master.Save(); err != nil {
+		slog.Error("failed to save playlist state", "error", err)
+	}
 	return playlistRemovals, nil
 }
 
 // Scan re-scans the music directory and registers newly discovered files in
 // the library. Returns (newlyAdded, libraryTotal, error).
 func (s *TrackService) Scan() (int, int, error) {
-	if s.master.Library == nil {
-		return 0, 0, fmt.Errorf("track library not initialised")
+	lib := s.master.Library()
+	if lib == nil {
+		return 0, 0, apierror.ErrInternal("track library not initialised")
 	}
-	_, added, err := playlist.ScanIntoLibrary(s.cfg.MusicDir, s.master.Library)
+	_, added, err := playlist.ScanIntoLibrary(s.cfg.MusicDir, lib)
 	if err != nil {
 		return 0, 0, err
 	}
-	s.save()
-	return added, s.master.Library.Count(), nil
+	if err := s.master.Save(); err != nil {
+		slog.Error("failed to save playlist state", "error", err)
+	}
+	return added, s.tracks.Count(), nil
 }
 
 // LibraryTotal returns the number of tracks currently in the library.
 func (s *TrackService) LibraryTotal() int {
-	if s.master.Library == nil {
-		return 0
-	}
-	return s.master.Library.Count()
+	return s.tracks.Count()
 }
 
 // UploadResult holds the outcome of a successful track upload.
@@ -200,14 +346,14 @@ func uniqueDestPath(dir, filename string) string {
 // (sanitised + original extension) and as the track's Title tag. Other meta
 // fields override whatever is embedded in the file's audio tags.
 func (s *TrackService) Upload(filename string, content io.Reader, meta UploadMeta) (*UploadResult, error) {
-	if s.master.Library == nil {
-		return nil, fmt.Errorf("track library not initialised")
+	if s.master.Library() == nil {
+		return nil, apierror.ErrInternal("track library not initialised")
 	}
 
 	ext := strings.ToLower(filepath.Ext(filename))
 	if !playlist.IsSupportedFormat(ext) {
-		return nil, fmt.Errorf("unsupported audio format %q; supported: %s",
-			ext, strings.Join(playlist.SupportedFormats, ", "))
+		return nil, apierror.ErrValidation(fmt.Sprintf("unsupported audio format %q; supported: %s",
+			ext, strings.Join(playlist.SupportedFormats, ", ")))
 	}
 
 	// Determine the base name: prefer meta.Title (sanitized) over the original
@@ -237,7 +383,7 @@ func (s *TrackService) Upload(filename string, content io.Reader, meta UploadMet
 		return nil, fmt.Errorf("could not resolve destination path: %w", err)
 	}
 	if !strings.HasPrefix(absDest+string(filepath.Separator), absMusic+string(filepath.Separator)) {
-		return nil, fmt.Errorf("destination path is outside the music directory")
+		return nil, apierror.ErrForbidden("destination path is outside the music directory")
 	}
 
 	// Write the file to disk.
@@ -318,7 +464,7 @@ func (s *TrackService) Upload(filename string, content io.Reader, meta UploadMet
 		}
 	}
 
-	canonical, added := s.master.Library.Add(track)
+	canonical, added := s.tracks.Add(track)
 
 	if added {
 		slog.Info("Track uploaded and registered in library",
@@ -326,7 +472,9 @@ func (s *TrackService) Upload(filename string, content io.Reader, meta UploadMet
 			"track_id", canonical.ID,
 			"title", canonical.Title,
 		)
-		s.save()
+		if err := s.master.Save(); err != nil {
+			slog.Error("failed to save playlist state", "error", err)
+		}
 	} else {
 		// Duplicate – remove the file we just wrote since the library already
 		// knows this checksum (possibly under a different filename).

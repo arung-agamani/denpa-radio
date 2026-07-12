@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/arung-agamani/denpa-radio/internal/apierror"
 )
 
 // MasterPlaylist holds collections of playlists organised by time-of-day tags.
@@ -174,7 +176,7 @@ func (mp *MasterPlaylist) TimeTagForHourConfigured(hour int) TimeTag {
 // library reference is set to this master playlist's library.
 func (mp *MasterPlaylist) AssignPlaylist(tag TimeTag, pl *Playlist) error {
 	if !mp.IsConfiguredTag(tag) {
-		return fmt.Errorf("invalid time tag: %s", tag)
+		return apierror.ErrValidation(fmt.Sprintf("invalid time tag: %s", tag))
 	}
 
 	mp.mu.Lock()
@@ -229,7 +231,7 @@ func (mp *MasterPlaylist) RemovePlaylist(tag TimeTag, playlistID int64) error {
 		}
 	}
 
-	return fmt.Errorf("playlist %d not found under tag %s", playlistID, tag)
+	return apierror.ErrNotFound(fmt.Sprintf("playlist %d not found under tag %s", playlistID, tag))
 }
 
 // FindPlaylistByID searches all tags for a playlist with the given ID and
@@ -245,7 +247,7 @@ func (mp *MasterPlaylist) FindPlaylistByID(id int64) (*Playlist, TimeTag, error)
 			}
 		}
 	}
-	return nil, "", fmt.Errorf("playlist %d not found", id)
+	return nil, "", apierror.ErrNotFound(fmt.Sprintf("playlist %d not found", id))
 }
 
 // AllPlaylists returns every playlist across all tags.
@@ -427,7 +429,7 @@ func (mp *MasterPlaylist) SetTimezone(name string) error {
 
 	loc, err := time.LoadLocation(name)
 	if err != nil {
-		return fmt.Errorf("invalid timezone %q: %w", name, err)
+		return apierror.ErrValidation(fmt.Sprintf("invalid timezone %q: %v", name, err))
 	}
 
 	mp.location = loc
@@ -564,8 +566,8 @@ func (mp *MasterPlaylist) AdvanceToNextPlaylist() (*Playlist, error) {
 
 	pls := mp.getPlaylistsUnsafe(mp.activeTag)
 	if len(pls) == 0 {
-		return nil, fmt.Errorf("no playlists for tag %s", mp.activeTag)
-	}
+	return nil, apierror.ErrNotFound(fmt.Sprintf("no playlists for tag %s", mp.activeTag))
+}
 
 	mp.activePlaylistIndex = (mp.activePlaylistIndex + 1) % len(pls)
 	return pls[mp.activePlaylistIndex], nil

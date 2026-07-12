@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/arung-agamani/denpa-radio/internal/apierror"
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
+	"github.com/arung-agamani/denpa-radio/internal/repository"
 )
 
 // MasterTagInfo describes the playlists assigned to a single time tag.
@@ -25,19 +27,12 @@ type MasterSnapshot struct {
 // MasterService implements the business logic for master playlist and
 // time-tag assignment operations.
 type MasterService struct {
-	master    *playlist.MasterPlaylist
-	store     *playlist.Store
+	master    repository.MasterPlaylistRepository
 	scheduler *playlist.Scheduler
 }
 
-func NewMasterService(master *playlist.MasterPlaylist, store *playlist.Store, scheduler *playlist.Scheduler) *MasterService {
-	return &MasterService{master: master, store: store, scheduler: scheduler}
-}
-
-func (s *MasterService) save() {
-	if err := s.store.Save(s.master); err != nil {
-		slog.Error("Failed to save playlist state", "error", err)
-	}
+func NewMasterService(master repository.MasterPlaylistRepository, scheduler *playlist.Scheduler) *MasterService {
+	return &MasterService{master: master, scheduler: scheduler}
 }
 
 // Get returns a snapshot of the full master playlist structure.
@@ -65,7 +60,7 @@ func (s *MasterService) Get() MasterSnapshot {
 // AssignPlaylistToTag moves or assigns a playlist to a specific time tag.
 func (s *MasterService) AssignPlaylistToTag(playlistID int64, tagStr string) error {
 	if !s.master.IsConfiguredTag(playlist.TimeTag(tagStr)) {
-		return fmt.Errorf("invalid tag: %s is not a configured time slot", tagStr)
+		return apierror.ErrValidation(fmt.Sprintf("invalid tag: %s is not a configured time slot", tagStr))
 	}
 	tag := playlist.TimeTag(tagStr)
 	pl, currentTag, err := s.master.FindPlaylistByID(playlistID)
@@ -81,7 +76,9 @@ func (s *MasterService) AssignPlaylistToTag(playlistID int64, tagStr string) err
 	if err := s.master.AssignPlaylist(tag, pl); err != nil {
 		return err
 	}
-	s.save()
+	if err := s.master.Save(); err != nil {
+		slog.Error("failed to save playlist state", "error", err)
+	}
 	s.scheduler.ForceCheck()
 	return nil
 }
@@ -89,13 +86,15 @@ func (s *MasterService) AssignPlaylistToTag(playlistID int64, tagStr string) err
 // RemovePlaylistFromTag removes a playlist from a specific time tag.
 func (s *MasterService) RemovePlaylistFromTag(tagStr string, playlistID int64) error {
 	if !s.master.IsConfiguredTag(playlist.TimeTag(tagStr)) {
-		return fmt.Errorf("invalid tag: %s is not a configured time slot", tagStr)
+		return apierror.ErrValidation(fmt.Sprintf("invalid tag: %s is not a configured time slot", tagStr))
 	}
 	tag := playlist.TimeTag(tagStr)
 	if err := s.master.RemovePlaylist(tag, playlistID); err != nil {
 		return err
 	}
-	s.save()
+	if err := s.master.Save(); err != nil {
+		slog.Error("failed to save playlist state", "error", err)
+	}
 	return nil
 }
 
@@ -110,7 +109,9 @@ func (s *MasterService) SetTimeSlots(slots []playlist.TimeSlot) error {
 	if err := s.master.SetTimeSlots(slots); err != nil {
 		return err
 	}
-	s.save()
+	if err := s.master.Save(); err != nil {
+		slog.Error("failed to save playlist state", "error", err)
+	}
 	s.scheduler.ForceCheck()
 	return nil
 }

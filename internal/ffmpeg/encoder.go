@@ -3,10 +3,13 @@ package ffmpeg
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os/exec"
+	"strconv"
 )
 
 type Encoder struct {
@@ -81,6 +84,46 @@ func (e *Encoder) Stream(ctx context.Context, inputFile string, output io.Writer
 	}
 
 	return nil
+}
+
+type ffprobeFormat struct {
+	Format struct {
+		Duration string `json:"duration"`
+	} `json:"format"`
+}
+
+// ProbeDuration returns the duration of an audio file in seconds via ffprobe.
+// Returns 0 if the file cannot be probed.
+func ProbeDuration(filePath string) int {
+	cmd := exec.Command("ffprobe",
+		"-v", "quiet",
+		"-print_format", "json",
+		"-show_format",
+		filePath,
+	)
+
+	out, err := cmd.Output()
+	if err != nil {
+		slog.Debug("ffprobe failed", "path", filePath, "error", err)
+		return 0
+	}
+
+	var data ffprobeFormat
+	if err := json.Unmarshal(out, &data); err != nil {
+		slog.Debug("ffprobe output parse failed", "path", filePath, "error", err)
+		return 0
+	}
+
+	if data.Format.Duration == "" {
+		return 0
+	}
+
+	f, err := strconv.ParseFloat(data.Format.Duration, 64)
+	if err != nil {
+		return 0
+	}
+
+	return int(math.Round(f))
 }
 
 // ConvertToOGG converts an audio file to OGG Vorbis format. The output file

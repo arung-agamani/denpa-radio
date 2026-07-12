@@ -3,6 +3,8 @@ package radio
 import (
 	"strings"
 
+	"github.com/arung-agamani/denpa-radio/internal/apierror"
+	"github.com/arung-agamani/denpa-radio/internal/apiresponse"
 	"github.com/arung-agamani/denpa-radio/internal/auth"
 	"github.com/gin-gonic/gin"
 )
@@ -29,28 +31,22 @@ func AuthRequired(a *auth.Auth) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			c.AbortWithStatusJSON(401, gin.H{
-				"status": "error",
-				"error":  "authentication required",
-			})
+			apiresponse.Error(c, apierror.ErrUnauthorized("authentication required"))
+			c.Abort()
 			return
 		}
 
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			c.AbortWithStatusJSON(401, gin.H{
-				"status": "error",
-				"error":  "authentication required",
-			})
+			apiresponse.Error(c, apierror.ErrUnauthorized("authentication required"))
+			c.Abort()
 			return
 		}
 
 		token := strings.TrimSpace(parts[1])
 		if _, err := a.ValidateToken(token); err != nil {
-			c.AbortWithStatusJSON(401, gin.H{
-				"status": "error",
-				"error":  "invalid or expired token",
-			})
+			apiresponse.Error(c, apierror.ErrUnauthorized("invalid or expired token"))
+			c.Abort()
 			return
 		}
 

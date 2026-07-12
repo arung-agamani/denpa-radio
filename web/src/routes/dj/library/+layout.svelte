@@ -2,7 +2,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { trackLibrary, toasts, playlists, master } from '$lib/stores';
-  import { scanTracks, reconcile, enrichLibrary } from '$lib/api';
+  import { scanTracks, reconcile, enrichLibrary, refreshTrackMetadata } from '$lib/api';
 
   let { children } = $props();
 
@@ -21,6 +21,7 @@
   let scanning = $state(false);
   let reconciling = $state(false);
   let enriching = $state(false);
+  let refreshing = $state(false);
 
   async function handleScan() {
     scanning = true;
@@ -63,6 +64,19 @@
       toasts.error('Enrichment failed: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       enriching = false;
+    }
+  }
+
+  async function handleRefreshMetadata() {
+    refreshing = true;
+    try {
+      const result = await refreshTrackMetadata();
+      toasts.success(`Metadata refreshed: ${result.updated} of ${result.probed} tracks probed, ${result.failed} failed.`);
+      await trackLibrary.refresh();
+    } catch (err) {
+      toasts.error('Metadata refresh failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      refreshing = false;
     }
   }
 </script>
@@ -111,6 +125,15 @@
     >
       {#if enriching}<svg class="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" /><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>{/if}
       ✨ Enrich All
+    </button>
+    <button
+      type="button"
+      class="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+      onclick={handleRefreshMetadata}
+      disabled={refreshing}
+    >
+      {#if refreshing}<svg class="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" /><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>{/if}
+      ⏱ Refresh Durations
     </button>
   </div>
 

@@ -4,22 +4,23 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/arung-agamani/denpa-radio/internal/apierror"
 	"github.com/arung-agamani/denpa-radio/internal/metadata"
-	"github.com/arung-agamani/denpa-radio/internal/playlist"
+	"github.com/arung-agamani/denpa-radio/internal/repository"
 )
 
 // MetadataService handles album art serving and external metadata enrichment.
 type MetadataService struct {
-	master  *playlist.MasterPlaylist
-	store   *playlist.Store
+	tracks   repository.TrackRepository
+	master   repository.MasterPlaylistRepository
 	enricher *metadata.Enricher
 }
 
 // NewMetadataService creates a new MetadataService.
-func NewMetadataService(master *playlist.MasterPlaylist, store *playlist.Store, enricher *metadata.Enricher) *MetadataService {
+func NewMetadataService(tracks repository.TrackRepository, master repository.MasterPlaylistRepository, enricher *metadata.Enricher) *MetadataService {
 	return &MetadataService{
+		tracks:   tracks,
 		master:   master,
-		store:    store,
 		enricher: enricher,
 	}
 }
@@ -27,10 +28,7 @@ func NewMetadataService(master *playlist.MasterPlaylist, store *playlist.Store, 
 // GetCoverPath returns the file path to a track's cover art, if any.
 // Returns empty string if no cover art is available.
 func (s *MetadataService) GetCoverPath(trackID int64) string {
-	if s.master.Library == nil {
-		return ""
-	}
-	track := s.master.Library.GetByID(trackID)
+	track := s.tracks.GetByID(trackID)
 	if track == nil {
 		return ""
 	}
@@ -40,14 +38,10 @@ func (s *MetadataService) GetCoverPath(trackID int64) string {
 // EnrichTrack enriches a single track's metadata from external sources.
 // Returns the enrichment result.
 func (s *MetadataService) EnrichTrack(trackID int64) (*metadata.EnrichResult, error) {
-	if s.master.Library == nil {
-		return nil, fmt.Errorf("track library not initialised")
-	}
-
-	track := s.master.Library.GetByID(trackID)
+	track := s.tracks.GetByID(trackID)
 	if track == nil {
-		return nil, fmt.Errorf("track %d not found", trackID)
-	}
+	return nil, apierror.ErrNotFound(fmt.Sprintf("track %d not found", trackID))
+}
 
 	artist := track.Artist
 	album := track.Album
@@ -65,7 +59,9 @@ func (s *MetadataService) EnrichTrack(trackID int64) (*metadata.EnrichResult, er
 	// If cover art was fetched, update the track's CoverPath.
 	if result != nil && result.ArtPath != "" {
 		track.CoverPath = result.ArtPath
-		s.save()
+		if err := s.master.Save(); err != nil {
+			slog.Error("failed to save playlist state", "error", err)
+		}
 	}
 
 	if result != nil {
@@ -79,7 +75,9 @@ func (s *MetadataService) EnrichTrack(trackID int64) (*metadata.EnrichResult, er
 			updated = true
 		}
 		if updated {
-			s.save()
+			if err := s.master.Save(); err != nil {
+				slog.Error("failed to save playlist state", "error", err)
+			}
 		}
 	}
 
@@ -89,11 +87,7 @@ func (s *MetadataService) EnrichTrack(trackID int64) (*metadata.EnrichResult, er
 // EnrichAll enriches all tracks in the library that have artist/album metadata.
 // Returns the number of tracks attempted and the number that had cover art found.
 func (s *MetadataService) EnrichAll() (attempted int, artFound int, err error) {
-	if s.master.Library == nil {
-		return 0, 0, fmt.Errorf("track library not initialised")
-	}
-
-	tracks := s.master.Library.List()
+	tracks := s.tracks.List()
 	for _, t := range tracks {
 		if t.Artist == "" && t.Album == "" {
 			continue
@@ -121,14 +115,10 @@ func (s *MetadataService) EnrichAll() (attempted int, artFound int, err error) {
 	}
 
 	if artFound > 0 {
-		s.save()
+		if err := s.master.Save(); err != nil {
+			slog.Error("failed to save playlist state", "error", err)
+		}
 	}
 
 	return attempted, artFound, nil
-}
-
-func (s *MetadataService) save() {
-	if err := s.store.Save(s.master); err != nil {
-		slog.Error("Failed to save playlist state", "error", err)
-	}
 }

@@ -3,8 +3,12 @@ package handler
 import (
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/arung-agamani/denpa-radio/internal/apierror"
+	"github.com/arung-agamani/denpa-radio/internal/apiresponse"
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
 	"github.com/arung-agamani/denpa-radio/internal/radio/service"
 	"github.com/gin-gonic/gin"
@@ -15,18 +19,18 @@ const maxUploadSize = 100 << 20
 
 // TrackHandlers holds the gin route handlers for the track library endpoints.
 type TrackHandlers struct {
-	svc *service.TrackService
+	svc         *service.TrackService
+	metadataSvc *service.MetadataService
 }
 
-func NewTrackHandlers(svc *service.TrackService) *TrackHandlers {
-	return &TrackHandlers{svc: svc}
+func NewTrackHandlers(svc *service.TrackService, metadataSvc *service.MetadataService) *TrackHandlers {
+	return &TrackHandlers{svc: svc, metadataSvc: metadataSvc}
 }
 
 // List handles GET /api/tracks
 func (h *TrackHandlers) List(c *gin.Context) {
 	tracks := h.svc.List()
-	c.JSON(http.StatusOK, gin.H{
-		"status":        "ok",
+	apiresponse.OK(c, gin.H{
 		"total_tracks":  len(tracks),
 		"tracks":        sanitiseTracks(tracks),
 		"library_total": h.svc.LibraryTotal(),
@@ -37,15 +41,15 @@ func (h *TrackHandlers) List(c *gin.Context) {
 func (h *TrackHandlers) GetByID(c *gin.Context) {
 	id, err := parseID(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "invalid track ID"})
+		apiresponse.Error(c, apierror.ErrValidation("invalid track ID"))
 		return
 	}
 	track, err := h.svc.GetByID(id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": err.Error()})
+		apiresponse.ErrorFromErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "track": sanitiseTrack(track)})
+	apiresponse.OK(c, sanitiseTrack(track))
 }
 
 // Search handles GET /api/tracks/search?q=<query>
@@ -53,11 +57,10 @@ func (h *TrackHandlers) Search(c *gin.Context) {
 	q := c.Query("q")
 	results, err := h.svc.Search(q)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": err.Error()})
+		apiresponse.ErrorFromErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"status":       "ok",
+	apiresponse.OK(c, gin.H{
 		"query":        q,
 		"total_tracks": len(results),
 		"tracks":       sanitiseTracks(results),
@@ -69,11 +72,10 @@ func (h *TrackHandlers) ListOrphaned(c *gin.Context) {
 	orphaned, err := h.svc.ListOrphaned()
 	if err != nil {
 		slog.Error("Failed to find orphaned tracks", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to scan music directory"})
+		apiresponse.Error(c, apierror.ErrInternal("failed to scan music directory"))
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"status":       "ok",
+	apiresponse.OK(c, gin.H{
 		"total_tracks": len(orphaned),
 		"tracks":       sanitiseTracks(orphaned),
 	})
@@ -83,20 +85,20 @@ func (h *TrackHandlers) ListOrphaned(c *gin.Context) {
 func (h *TrackHandlers) Update(c *gin.Context) {
 	id, err := parseID(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "invalid track ID"})
+		apiresponse.Error(c, apierror.ErrValidation("invalid track ID"))
 		return
 	}
 	var upd playlist.TrackUpdate
 	if err := c.ShouldBindJSON(&upd); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "invalid request body"})
+		apiresponse.Error(c, apierror.ErrValidation("invalid request body"))
 		return
 	}
 	track, err := h.svc.Update(id, upd)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"status": "error", "error": err.Error()})
+		apiresponse.ErrorFromErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "track": sanitiseTrack(track)})
+	apiresponse.OK(c, sanitiseTrack(track))
 }
 
 // Delete handles DELETE /api/tracks/:id  (protected)
@@ -106,40 +108,18 @@ func (h *TrackHandlers) Update(c *gin.Context) {
 func (h *TrackHandlers) Delete(c *gin.Context) {
 	id, err := parseID(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "invalid track ID"})
+		apiresponse.Error(c, apierror.ErrValidation("invalid track ID"))
 		return
 	}
 	deleteFromDisk := c.Query("deleteFromDisk") == "true"
 	playlistRemovals, err := h.svc.Delete(id, deleteFromDisk)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if isNotFound(err) {
-			status = http.StatusNotFound
-		}
-		c.JSON(status, gin.H{"status": "error", "error": err.Error()})
+		apiresponse.ErrorFromErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"status":            "ok",
-		"message":           gin.H{"id": id, "playlist_removals": playlistRemovals},
+	apiresponse.OK(c, gin.H{
 		"playlist_removals": playlistRemovals,
 		"file_deleted":      deleteFromDisk,
-	})
-}
-
-// Scan handles POST /api/tracks/scan  (protected)
-func (h *TrackHandlers) Scan(c *gin.Context) {
-	slog.Info("Track library scan requested", "remote", c.ClientIP())
-	added, total, err := h.svc.Scan()
-	if err != nil {
-		slog.Error("Library scan failed", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"status": "error", "error": "failed to scan music directory"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"status":        "ok",
-		"newly_added":   added,
-		"library_total": total,
 	})
 }
 
@@ -156,38 +136,20 @@ func (h *TrackHandlers) Upload(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadSize)
 
 	if err := c.Request.ParseMultipartForm(maxUploadSize); err != nil {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
-			"status": "error",
-			"error": gin.H{
-				"code":    "FILE_TOO_LARGE",
-				"message": "audio file must not exceed 100 MB",
-			},
-		})
+		apiresponse.Error(c, apierror.ErrValidation("audio file must not exceed 100 MB"))
 		return
 	}
 
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"status": "error",
-			"error": gin.H{
-				"code":    "MISSING_FILE",
-				"message": "multipart field \"file\" is required",
-			},
-		})
+		apiresponse.Error(c, apierror.ErrValidation(`multipart field "file" is required`))
 		return
 	}
 
 	f, err := fileHeader.Open()
 	if err != nil {
 		slog.Error("Failed to open uploaded file", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"status": "error",
-			"error": gin.H{
-				"code":    "INTERNAL_ERROR",
-				"message": "failed to read uploaded file",
-			},
-		})
+		apiresponse.Error(c, apierror.ErrInternal("failed to read uploaded file"))
 		return
 	}
 	defer f.Close()
@@ -208,38 +170,91 @@ func (h *TrackHandlers) Upload(c *gin.Context) {
 
 	result, err := h.svc.Upload(fileHeader.Filename, f, meta)
 	if err != nil {
-		code := "UPLOAD_FAILED"
-		status := http.StatusInternalServerError
-		if containsAny(err.Error(), "unsupported audio format") {
-			code = "UNSUPPORTED_FORMAT"
-			status = http.StatusUnprocessableEntity
-		} else if containsAny(err.Error(), "outside the music directory") {
-			code = "FORBIDDEN"
-			status = http.StatusForbidden
-		} else if containsAny(err.Error(), "library not initialised") {
-			code = "LIBRARY_NOT_READY"
-			status = http.StatusServiceUnavailable
-		}
 		slog.Warn("Track upload failed", "filename", fileHeader.Filename, "error", err)
-		c.JSON(status, gin.H{
-			"status": "error",
-			"error": gin.H{
-				"code":    code,
-				"message": err.Error(),
-			},
+		apiresponse.ErrorFromErr(c, err)
+		return
+	}
+
+	if !result.Added {
+		// Duplicate – 200 OK with added=false so the client can distinguish.
+		apiresponse.OK(c, gin.H{
+			"added": result.Added,
+			"track": sanitiseTrack(result.Track),
 		})
 		return
 	}
 
-	httpStatus := http.StatusCreated
-	if !result.Added {
-		// Duplicate – 200 OK with added=false so the client can distinguish.
-		httpStatus = http.StatusOK
+	apiresponse.Created(c, gin.H{
+		"added": result.Added,
+		"track": sanitiseTrack(result.Track),
+	})
+}
+
+// Cover handles GET /api/tracks/:id/cover
+// Serves the album art image for a track, or 404 if none is available.
+func (h *TrackHandlers) Cover(c *gin.Context) {
+	id, err := parseID(c.Param("id"))
+	if err != nil {
+		apiresponse.Error(c, apierror.ErrValidation("invalid track ID"))
+		return
 	}
 
-	c.JSON(httpStatus, gin.H{
-		"status": "ok",
-		"added":  result.Added,
-		"track":  sanitiseTrack(result.Track),
-	})
+	coverPath := h.metadataSvc.GetCoverPath(id)
+	if coverPath == "" {
+		c.Status(http.StatusNotFound)
+		return
+	}
+
+	// Resolve relative paths against the working directory.
+	absPath := coverPath
+	if !filepath.IsAbs(coverPath) {
+		wd, err := os.Getwd()
+		if err != nil {
+			slog.Error("Failed to get working directory", "error", err)
+			c.Status(http.StatusInternalServerError)
+			return
+		}
+		absPath = filepath.Join(wd, coverPath)
+	}
+
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		slog.Warn("Cover art file not found on disk", "path", absPath, "track_id", id)
+		c.Status(http.StatusNotFound)
+		return
+	}
+
+	// Set content type based on extension.
+	ext := strings.ToLower(filepath.Ext(absPath))
+	switch ext {
+	case ".jpg", ".jpeg":
+		c.Header("Content-Type", "image/jpeg")
+	case ".png":
+		c.Header("Content-Type", "image/png")
+	case ".gif":
+		c.Header("Content-Type", "image/gif")
+	case ".webp":
+		c.Header("Content-Type", "image/webp")
+	}
+
+	c.Header("Cache-Control", "public, max-age=86400") // cache for 24 hours
+	http.ServeFile(c.Writer, c.Request, absPath)
+}
+
+// Enrich handles POST /api/tracks/:id/enrich  (protected)
+// Triggers external metadata enrichment for a single track.
+func (h *TrackHandlers) Enrich(c *gin.Context) {
+	id, err := parseID(c.Param("id"))
+	if err != nil {
+		apiresponse.Error(c, apierror.ErrValidation("invalid track ID"))
+		return
+	}
+
+	result, err := h.metadataSvc.EnrichTrack(id)
+	if err != nil {
+		slog.Error("Enrichment failed", "track_id", id, "error", err)
+		apiresponse.ErrorFromErr(c, err)
+		return
+	}
+
+	apiresponse.OK(c, result)
 }

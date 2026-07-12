@@ -3,8 +3,9 @@ package handler
 import (
 	"fmt"
 	"log/slog"
-	"net/http"
 
+	"github.com/arung-agamani/denpa-radio/internal/apierror"
+	"github.com/arung-agamani/denpa-radio/internal/apiresponse"
 	"github.com/arung-agamani/denpa-radio/internal/auth"
 	"github.com/gin-gonic/gin"
 )
@@ -25,12 +26,12 @@ func (h *AuthHandlers) Login(c *gin.Context) {
 		Password string `json:"password"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "invalid request body"})
+		apiresponse.Error(c, apierror.ErrValidation("invalid request body"))
 		return
 	}
 	if len(body.Username) == 0 || len(body.Username) > 256 ||
 		len(body.Password) == 0 || len(body.Password) > 256 {
-		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "invalid credentials format"})
+		apiresponse.Error(c, apierror.ErrValidation("invalid credentials format"))
 		return
 	}
 	token, err := h.a.Authenticate(body.Username, body.Password, c.Request.RemoteAddr)
@@ -42,18 +43,14 @@ func (h *AuthHandlers) Login(c *gin.Context) {
 		if err == auth.ErrRateLimited {
 			remaining := h.a.RemainingLockout(c.Request.RemoteAddr)
 			c.Header("Retry-After", fmt.Sprintf("%d", int(remaining.Seconds())))
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"status": "error",
-				"error":  "too many login attempts, please try again later",
-			})
+			apiresponse.Error(c, apierror.ErrRateLimited("too many login attempts, please try again later"))
 			return
 		}
-		c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "error": "invalid credentials"})
+		apiresponse.Error(c, apierror.ErrUnauthorized("invalid credentials"))
 		return
 	}
 	slog.Info("DJ logged in", "username", body.Username, "remote", c.Request.RemoteAddr)
-	c.JSON(http.StatusOK, gin.H{
-		"status":   "ok",
+	apiresponse.OK(c, gin.H{
 		"token":    token,
 		"username": body.Username,
 	})
@@ -61,5 +58,5 @@ func (h *AuthHandlers) Login(c *gin.Context) {
 
 // VerifyToken handles GET /api/auth/verify  (middleware already validated the token)
 func (h *AuthHandlers) VerifyToken(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "token is valid"})
+	apiresponse.OK(c, gin.H{"message": "token is valid"})
 }

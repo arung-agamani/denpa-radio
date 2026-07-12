@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 )
 
@@ -208,6 +209,99 @@ type TrackUpdate struct {
 	Year     *int    `json:"year,omitempty"`
 	TrackNum *int    `json:"trackNum,omitempty"`
 	Duration *int    `json:"duration,omitempty"`
+}
+
+// TrackFilter selects tracks by their current metadata.
+type TrackFilter struct {
+	Album  string `json:"album,omitempty"`
+	Artist string `json:"artist,omitempty"`
+	Genre  string `json:"genre,omitempty"`
+}
+
+func (f TrackFilter) matches(t *Track) bool {
+	if f.Album != "" && !strings.EqualFold(t.Album, f.Album) {
+		return false
+	}
+	if f.Artist != "" && !strings.EqualFold(t.Artist, f.Artist) {
+		return false
+	}
+	if f.Genre != "" && !strings.EqualFold(t.Genre, f.Genre) {
+		return false
+	}
+	return true
+}
+
+func (lib *TrackLibrary) validateFilter(filter TrackFilter) error {
+	if filter.Album == "" && filter.Artist == "" && filter.Genre == "" {
+		return fmt.Errorf("at least one filter field is required")
+	}
+	return nil
+}
+
+// BatchUpdate applies upd to all tracks matching filter and returns the count
+// of updated tracks.
+func (lib *TrackLibrary) BatchUpdate(filter TrackFilter, upd TrackUpdate) (int, error) {
+	if err := lib.validateFilter(filter); err != nil {
+		return 0, err
+	}
+
+	lib.mu.Lock()
+	defer lib.mu.Unlock()
+
+	updated := 0
+	for id := int64(1); id <= lib.nextID; id++ {
+		t, ok := lib.byID[id]
+		if !ok || !filter.matches(t) {
+			continue
+		}
+		if upd.Title != nil {
+			t.Title = *upd.Title
+		}
+		if upd.Artist != nil {
+			t.Artist = *upd.Artist
+		}
+		if upd.Album != nil {
+			t.Album = *upd.Album
+		}
+		if upd.Genre != nil {
+			t.Genre = *upd.Genre
+		}
+		if upd.Year != nil {
+			t.Year = *upd.Year
+		}
+		if upd.TrackNum != nil {
+			t.TrackNum = *upd.TrackNum
+		}
+		if upd.Duration != nil {
+			t.Duration = *upd.Duration
+		}
+		updated++
+	}
+
+	return updated, nil
+}
+
+// BatchSetCover applies coverPath to all tracks matching filter and returns
+// the count of updated tracks.
+func (lib *TrackLibrary) BatchSetCover(filter TrackFilter, coverPath string) (int, error) {
+	if err := lib.validateFilter(filter); err != nil {
+		return 0, err
+	}
+
+	lib.mu.Lock()
+	defer lib.mu.Unlock()
+
+	updated := 0
+	for id := int64(1); id <= lib.nextID; id++ {
+		t, ok := lib.byID[id]
+		if !ok || !filter.matches(t) {
+			continue
+		}
+		t.CoverPath = coverPath
+		updated++
+	}
+
+	return updated, nil
 }
 
 // List returns all tracks in the library as a slice, sorted by ID.

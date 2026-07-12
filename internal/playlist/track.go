@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/arung-agamani/denpa-radio/internal/ffmpeg"
 	"github.com/dhowden/tag"
 )
 
@@ -156,6 +157,10 @@ func extractTrackMetadata(track *Track, path string) {
 		if coverPath := saveCoverArt(track.Checksum, pic); coverPath != "" {
 			track.CoverPath = coverPath
 		}
+	}
+
+	if dur := ffmpeg.ProbeDuration(path); dur > 0 {
+		track.Duration = dur
 	}
 }
 

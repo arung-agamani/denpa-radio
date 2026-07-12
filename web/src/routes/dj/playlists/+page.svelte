@@ -71,7 +71,7 @@
     selectedPlaylistId = id;
     try {
       const data = await getPlaylist(id);
-      selectedPlaylist = (data as unknown as { playlist: Playlist }).playlist ?? (data as unknown as Playlist);
+      selectedPlaylist = data.playlist;
     } catch (err) {
       toasts.error('Failed to load playlist: ' + (err instanceof Error ? err.message : String(err)));
       selectedPlaylist = null;

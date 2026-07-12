@@ -23,7 +23,7 @@
   async function handleEnrich() {
     enriching = true;
     try {
-      const { result } = await enrichTrack(track.id);
+      const result = await enrichTrack(track.id);
       if (result.artFetched) {
         toasts.success(`Cover art found for "${track.album || track.title}"`);
         await trackLibrary.refresh();

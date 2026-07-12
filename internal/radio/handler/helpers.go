@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"strconv"
 
+	"github.com/arung-agamani/denpa-radio/internal/apierror"
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
 )
 
@@ -52,19 +54,19 @@ func sanitiseTracks(tracks []*playlist.Track) []map[string]interface{} {
 	return result
 }
 
-// isNotFound is a heuristic to distinguish "not found" errors from others.
+// isNotFound reports whether err is a "not found" apierror or wraps one.
 func isNotFound(err error) bool {
-	return err != nil && containsAny(err.Error(), "not found", "does not exist")
+	return errors.Is(err, apierror.ErrNotFound(""))
 }
 
-// isValidationError detects validation / bad-request type errors.
+// isValidationError reports whether err is a "validation" apierror or wraps one.
 func isValidationError(err error) bool {
-	return err != nil && containsAny(err.Error(), "invalid tag", "name is required", "must be one of")
+	return errors.Is(err, apierror.ErrValidation(""))
 }
 
-// isForbidden detects path-traversal / forbidden errors.
+// isForbidden reports whether err is a "forbidden" apierror or wraps one.
 func isForbidden(err error) bool {
-	return err != nil && containsAny(err.Error(), "within the music directory", "forbidden")
+	return errors.Is(err, apierror.ErrForbidden(""))
 }
 
 func containsAny(s string, substrs ...string) bool {
