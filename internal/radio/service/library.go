@@ -49,8 +49,8 @@ func (s *LibraryService) BatchUpdateCover(filter playlist.TrackFilter, r io.Read
 
 // Reconcile scans the music directory, removes stale tracks, auto-adds
 // orphaned tracks to the active playlist, and persists state.
-func (s *LibraryService) Reconcile() (ReconcileResult, error) {
-	return s.radioSvc.Reconcile()
+func (s *LibraryService) Reconcile(channelSlug string) (ReconcileResult, error) {
+	return s.radioSvc.Reconcile(channelSlug)
 }
 
 // EnrichAll triggers batch enrichment for all tracks in the library.

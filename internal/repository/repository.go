@@ -38,6 +38,7 @@ type PlaylistRepository interface {
 // access to playlist management methods as well.
 type MasterPlaylistRepository interface {
 	PlaylistRepository
+	MasterPlaylist() *playlist.MasterPlaylist
 	Load() error
 	Save() error
 	Exists() bool

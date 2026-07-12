@@ -9,19 +9,42 @@ import (
 	"github.com/arung-agamani/denpa-radio/config"
 	"github.com/arung-agamani/denpa-radio/internal/apierror"
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
+	"github.com/arung-agamani/denpa-radio/internal/radio/channel"
 	"github.com/arung-agamani/denpa-radio/internal/repository"
 )
 
-// Broadcaster is the minimal interface the RadioService needs from the
-// stream broadcaster. Using an interface avoids a circular import with the
-// parent radio package.
-type Broadcaster interface {
-	CurrentTrack() string
-	ActiveClients() int
-	// Skip aborts the currently-streaming track and immediately advances to
-	// the next one.
-	Skip()
+// Broadcaster is an alias for channel.Broadcaster so that RadioService can
+// refer to it without importing channel everywhere.
+type Broadcaster = channel.Broadcaster
+
+// defaultChannel wraps the legacy master/broadcaster/scheduler so that
+// RadioService can treat them as a channel.Channel when no channel manager is
+// configured or when channelSlug is empty.
+type defaultChannel struct {
+	master      *playlist.MasterPlaylist
+	broadcaster Broadcaster
+	scheduler   *playlist.Scheduler
+	saver       func() error
 }
+
+func (d *defaultChannel) GetMaster() *playlist.MasterPlaylist { return d.master }
+func (d *defaultChannel) GetBroadcaster() Broadcaster         { return d.broadcaster }
+func (d *defaultChannel) GetScheduler() *playlist.Scheduler  { return d.scheduler }
+func (d *defaultChannel) Save() error {
+	if d.saver != nil {
+		return d.saver()
+	}
+	return nil
+}
+func (d *defaultChannel) GetSlug() string        { return "" }
+func (d *defaultChannel) GetName() string        { return "" }
+func (d *defaultChannel) GetDescription() string { return "" }
+func (d *defaultChannel) GetSortOrder() int      { return 0 }
+func (d *defaultChannel) GetEnabled() bool        { return true }
+func (d *defaultChannel) GetBitrate() string     { return "" }
+
+// Compile-time check that defaultChannel satisfies channel.Channel.
+var _ channel.Channel = (*defaultChannel)(nil)
 
 // StatusSnapshot holds all fields for the GET /api/status response.
 // CurrentTrackRaw carries the raw track so the handler layer can apply
@@ -66,10 +89,11 @@ type ReconcileResult struct {
 // RadioService implements business logic for station status, scheduler
 // monitoring, timezone management, and reconciliation.
 type RadioService struct {
-	master      repository.MasterPlaylistRepository
-	scheduler   *playlist.Scheduler
-	broadcaster Broadcaster
-	cfg         *config.Config
+	master         repository.MasterPlaylistRepository
+	scheduler      *playlist.Scheduler
+	broadcaster    Broadcaster
+	cfg            *config.Config
+	channelManager channel.ChannelManager
 }
 
 func NewRadioService(
@@ -77,25 +101,64 @@ func NewRadioService(
 	scheduler *playlist.Scheduler,
 	broadcaster Broadcaster,
 	cfg *config.Config,
+	channelManager channel.ChannelManager,
 ) *RadioService {
 	return &RadioService{
-		master:      master,
-		scheduler:   scheduler,
-		broadcaster: broadcaster,
-		cfg:         cfg,
+		master:         master,
+		scheduler:      scheduler,
+		broadcaster:    broadcaster,
+		cfg:            cfg,
+		channelManager: channelManager,
 	}
 }
 
-// Status builds the full station status snapshot.
-func (s *RadioService) Status() StatusSnapshot {
-	currentTrackPath := s.broadcaster.CurrentTrack()
+// resolveChannel returns the channel.Channel for the given slug. An empty slug
+// resolves to the legacy default channel (master/scheduler/broadcaster).
+func (s *RadioService) resolveChannel(channelSlug string) (channel.Channel, error) {
+	if channelSlug == "" {
+		if s.channelManager != nil {
+			ch := s.channelManager.DefaultChannel()
+			if ch == nil {
+				return nil, apierror.ErrInternal("no default channel configured")
+			}
+			return ch, nil
+		}
+		return &defaultChannel{
+			master:      s.master.MasterPlaylist(),
+			broadcaster: s.broadcaster,
+			scheduler:   s.scheduler,
+			saver:       func() error { return s.master.Save() },
+		}, nil
+	}
+	if s.channelManager == nil {
+		return nil, apierror.ErrInternal("channel manager not configured")
+	}
+	ch := s.channelManager.ChannelBySlug(channelSlug)
+	if ch == nil {
+		return nil, apierror.ErrNotFound(fmt.Sprintf("channel %q not found", channelSlug))
+	}
+	return ch, nil
+}
+
+// Status builds the full station status snapshot for the requested channel.
+func (s *RadioService) Status(channelSlug string) (StatusSnapshot, error) {
+	ch, err := s.resolveChannel(channelSlug)
+	if err != nil {
+		return StatusSnapshot{}, err
+	}
+
+	master := ch.GetMaster()
+	broadcaster := ch.GetBroadcaster()
+	scheduler := ch.GetScheduler()
+
+	currentTrackPath := broadcaster.CurrentTrack()
 	trackName := "none"
 	if currentTrackPath != "" {
 		trackName = filepath.Base(currentTrackPath)
 	}
 
-	activeTag := s.master.ActiveTag()
-	activePl, _ := s.master.ActivePlaylist()
+	activeTag := master.ActiveTag()
+	activePl, _ := master.ActivePlaylist()
 	var activePlaylistName string
 	var activePlaylistID *int64
 	if activePl != nil {
@@ -105,12 +168,12 @@ func (s *RadioService) Status() StatusSnapshot {
 
 	var currentTrackRaw *playlist.Track
 	if currentTrackPath != "" {
-		lib := s.master.Library()
+		lib := master.Library
 		if lib != nil {
 			currentTrackRaw = lib.GetByFilePath(currentTrackPath)
 		}
 		if currentTrackRaw == nil {
-			for _, pl := range s.master.AllPlaylists() {
+			for _, pl := range master.AllPlaylists() {
 				if t, _, err := pl.FindTrackByFilePath(currentTrackPath); err == nil {
 					currentTrackRaw = t
 					break
@@ -119,8 +182,8 @@ func (s *RadioService) Status() StatusSnapshot {
 		}
 	}
 
-	loc := s.master.Location()
-	tz := s.master.Timezone()
+	loc := master.Location()
+	tz := master.Timezone()
 	if tz == "" {
 		tz = "UTC"
 	}
@@ -129,37 +192,45 @@ func (s *RadioService) Status() StatusSnapshot {
 		StationName:      s.cfg.StationName,
 		CurrentTrack:     trackName,
 		CurrentTrackRaw:  currentTrackRaw,
-		TotalTracks:      s.master.TotalTracks(),
-		LibraryTracks:    s.master.LibraryTrackCount(),
-		ActiveClients:    s.broadcaster.ActiveClients(),
+		TotalTracks:      master.TotalTracks(),
+		LibraryTracks:    master.LibraryTrackCount(),
+		ActiveClients:    broadcaster.ActiveClients(),
 		MaxClients:       s.cfg.MaxClients,
 		ActiveTag:        activeTag,
 		ActivePlaylist:   activePlaylistName,
 		ActivePlaylistID: activePlaylistID,
-		SchedulerRunning: s.scheduler.Running(),
-		PlaylistSummary:  s.master.Summary(),
+		SchedulerRunning: scheduler.Running(),
+		PlaylistSummary:  master.Summary(),
 		Timezone:         tz,
 		ServerTime:       time.Now().In(loc).Format(time.RFC3339),
-	}
+	}, nil
 }
 
-// SchedulerStatus builds the scheduler status snapshot.
-func (s *RadioService) SchedulerStatus() SchedulerSnapshot {
-	loc := s.master.Location()
-	tz := s.master.Timezone()
+// SchedulerStatus builds the scheduler status snapshot for the requested channel.
+func (s *RadioService) SchedulerStatus(channelSlug string) (SchedulerSnapshot, error) {
+	ch, err := s.resolveChannel(channelSlug)
+	if err != nil {
+		return SchedulerSnapshot{}, err
+	}
+
+	master := ch.GetMaster()
+	scheduler := ch.GetScheduler()
+
+	loc := master.Location()
+	tz := master.Timezone()
 	if tz == "" {
 		tz = "UTC"
 	}
 	return SchedulerSnapshot{
-		Running:       s.scheduler.Running(),
-		LastTag:       s.scheduler.LastTag(),
-		TimeTags:      s.master.ConfiguredTags(),
-		CurrentTag:    s.master.TimeTagForHourConfigured(time.Now().In(loc).Hour()),
-		Summary:       s.master.Summary(),
-		LibraryTracks: s.master.LibraryTrackCount(),
+		Running:       scheduler.Running(),
+		LastTag:       scheduler.LastTag(),
+		TimeTags:      master.ConfiguredTags(),
+		CurrentTag:    master.TimeTagForHourConfigured(time.Now().In(loc).Hour()),
+		Summary:       master.Summary(),
+		LibraryTracks: master.LibraryTrackCount(),
 		Timezone:      tz,
 		ServerTime:    time.Now().In(loc).Format(time.RFC3339),
-	}
+	}, nil
 }
 
 // GetTimezone returns the current timezone name and current server time string.
@@ -179,7 +250,14 @@ func (s *RadioService) SetTimezone(tz string) (resolvedTZ, serverTime string, ac
 	if err = s.master.SetTimezone(tz); err != nil {
 		return
 	}
-	s.scheduler.ForceCheck()
+	if s.scheduler != nil {
+		s.scheduler.ForceCheck()
+	} else if s.channelManager != nil {
+		ch := s.channelManager.DefaultChannel()
+		if ch != nil {
+			ch.GetScheduler().ForceCheck()
+		}
+	}
 	if err = s.master.Save(); err != nil {
 		slog.Error("failed to save playlist state", "error", err)
 	}
@@ -199,32 +277,52 @@ func (s *RadioService) LegacyAllTracks() []*playlist.Track {
 	return s.master.AllTracksDeduped()
 }
 
-// GetQueue returns up to n upcoming tracks from the active playlist, starting
-// with the currently-playing track. Pass n <= 0 to get all tracks.
-func (s *RadioService) GetQueue(n int) []*playlist.Track {
-	tracks, _ := s.master.PeekQueue(n)
-	return tracks
+// GetQueue returns up to n upcoming tracks from the active playlist of the
+// requested channel, starting with the currently-playing track. Pass n <= 0
+// to get all tracks.
+func (s *RadioService) GetQueue(channelSlug string, n int) ([]*playlist.Track, error) {
+	ch, err := s.resolveChannel(channelSlug)
+	if err != nil {
+		return nil, err
+	}
+	tracks, _ := ch.GetMaster().PeekQueue(n)
+	return tracks, nil
 }
 
 // SkipNext immediately skips to the next track by aborting the current one.
-func (s *RadioService) SkipNext() {
-	s.broadcaster.Skip()
+func (s *RadioService) SkipNext(channelSlug string) error {
+	ch, err := s.resolveChannel(channelSlug)
+	if err != nil {
+		return err
+	}
+	ch.GetBroadcaster().Skip()
+	return nil
 }
 
 // SkipPrev seeks the active playlist cursor back one position, then aborts the
 // current track so playback restarts from the previous track.
-func (s *RadioService) SkipPrev() error {
-	if err := s.master.SeekPrev(); err != nil {
+func (s *RadioService) SkipPrev(channelSlug string) error {
+	ch, err := s.resolveChannel(channelSlug)
+	if err != nil {
 		return err
 	}
-	s.broadcaster.Skip()
+	if err := ch.GetMaster().SeekPrev(); err != nil {
+		return err
+	}
+	ch.GetBroadcaster().Skip()
 	return nil
 }
 
 // Reconcile scans the music directory, removes stale tracks, auto-adds
-// orphaned tracks to the active playlist, and persists state.
-func (s *RadioService) Reconcile() (ReconcileResult, error) {
-	lib := s.master.Library()
+// orphaned tracks to the active playlist of the requested channel, and persists state.
+func (s *RadioService) Reconcile(channelSlug string) (ReconcileResult, error) {
+	ch, err := s.resolveChannel(channelSlug)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+
+	master := ch.GetMaster()
+	lib := master.Library
 	if lib == nil {
 		return ReconcileResult{}, apierror.ErrInternal("track library not initialised")
 	}
@@ -232,7 +330,7 @@ func (s *RadioService) Reconcile() (ReconcileResult, error) {
 	stale := lib.RemoveStale()
 	removedCount := len(stale)
 	for _, t := range stale {
-		s.master.RemoveTrackFromAll(t.Checksum)
+		master.RemoveTrackFromAll(t.Checksum)
 	}
 	if removedCount > 0 {
 		slog.Info("Removed stale tracks from library and playlists", "count", removedCount)
@@ -253,7 +351,7 @@ func (s *RadioService) Reconcile() (ReconcileResult, error) {
 	}
 
 	if len(orphaned) > 0 {
-		activePl, plErr := s.master.ActivePlaylist()
+		activePl, plErr := master.ActivePlaylist()
 		if plErr == nil && activePl != nil {
 			activePl.AddTracks(orphaned)
 			slog.Info("Added orphaned tracks to active playlist",
@@ -262,13 +360,13 @@ func (s *RadioService) Reconcile() (ReconcileResult, error) {
 			)
 		}
 	}
-	if err := s.master.Save(); err != nil {
+	if err := ch.Save(); err != nil {
 		slog.Error("failed to save playlist state", "error", err)
 	}
 	return ReconcileResult{
 		RemovedCount:  removedCount,
 		OrphanedCount: len(orphaned),
 		Orphaned:      orphaned,
-		TotalTracks:   s.master.TotalTracks(),
+		TotalTracks:   master.TotalTracks(),
 	}, nil
 }

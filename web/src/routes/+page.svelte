@@ -3,8 +3,9 @@
   import { onMount } from 'svelte';
   import Player from '$lib/components/Player.svelte';
   import NowPlaying from '$lib/components/NowPlaying.svelte';
+  import ChannelSelector from '$lib/components/ChannelSelector.svelte';
   import TrackList from '$lib/components/TrackList.svelte';
-  import { status, stationName, currentTrackInfo } from '$lib/stores';
+  import { status, stationName, currentTrackInfo, channels, selectedChannel } from '$lib/stores';
   import { getQueue } from '$lib/api';
 
   let tracks: TrackItem[] = $state([]);
@@ -13,6 +14,7 @@
   let showFullQueue = $state(false);
 
   onMount(async () => {
+    await channels.refresh();
     await loadQueue();
   });
 
@@ -20,7 +22,7 @@
     loading = true;
     error = null;
     try {
-      const data = await getQueue();
+      const data = await getQueue($selectedChannel);
       tracks = data.tracks || [];
     } catch (err) {
       console.error('Failed to load queue:', err);
@@ -55,6 +57,22 @@
 
   let displayTracks = $derived(showFullQueue ? tracks : tracks.slice(0, 25));
   let hasMore = $derived(tracks.length > 25 && !showFullQueue);
+
+  let selectedChannelName = $derived(
+    $channels.find((c) => c.slug === $selectedChannel)?.name || $selectedChannel
+  );
+
+  let prevChannel = '';
+  $effect(() => {
+    const ch = $selectedChannel;
+    if (ch !== prevChannel) {
+      prevChannel = ch;
+      if (prevChannel !== '') {
+        loadQueue();
+        status.refresh();
+      }
+    }
+  });
 </script>
 
 <div class="px-4 sm:px-6 lg:px-8 py-8 space-y-6">
@@ -66,10 +84,21 @@
     <p class="mt-2 text-gray-500 dark:text-gray-400 text-sm sm:text-base">
       Tune in and enjoy the music 🎶
     </p>
+    {#if $channels.length > 1}
+      <div class="mt-1.5">
+        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300">
+          <span>📡</span>
+          <span>{selectedChannelName}</span>
+        </span>
+      </div>
+    {/if}
   </div>
 
   <!-- Player -->
   <Player />
+
+  <!-- Channel selector -->
+  <ChannelSelector />
 
   <!-- Now Playing -->
   <NowPlaying />

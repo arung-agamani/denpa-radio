@@ -11,6 +11,10 @@ type Config struct {
 	Bitrate      string
 	StationName  string
 	MaxClients   int
+	// MaxChannels bounds the number of broadcast channels. Read from the
+	// MAX_CHANNELS env var; defaults to 5 when missing, empty, unparseable,
+	// zero, or negative. Clamped to a minimum of 1.
+	MaxChannels  int
 	SampleRate   string
 	Channels     string
 	PlaylistFile string
@@ -25,12 +29,17 @@ type Config struct {
 }
 
 func Load() *Config {
+	maxChannels := getEnvAsInt("MAX_CHANNELS", 5)
+	if maxChannels < 1 {
+		maxChannels = 5
+	}
 	return &Config{
 		Port:         getEnv("PORT", "8000"),
 		MusicDir:     getEnv("MUSIC_DIR", "./music"),
 		Bitrate:      getEnv("BITRATE", "128k"),
 		StationName:  getEnv("STATION_NAME", "Denpa Radio"),
 		MaxClients:   getEnvAsInt("MAX_CLIENTS", 100),
+		MaxChannels:  maxChannels,
 		SampleRate:   getEnv("SAMPLE_RATE", "44100"),
 		Channels:     getEnv("CHANNELS", "2"),
 		PlaylistFile: getEnv("PLAYLIST_FILE", "./data/playlists.json"),

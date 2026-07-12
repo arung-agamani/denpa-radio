@@ -23,10 +23,10 @@ type storeDataV1 struct {
 	Night     []*Playlist `json:"night"`
 }
 
-// storePlaylistV2 is the per-playlist representation in the v2 format.
+// StorePlaylistV2 is the per-playlist representation in the v2 format.
 // Instead of embedding full Track objects it stores an ordered list of
 // checksums that reference entries in the library.
-type storePlaylistV2 struct {
+type StorePlaylistV2 struct {
 	ID                   int64    `json:"id"`
 	Name                 string   `json:"name"`
 	Tag                  TimeTag  `json:"tag"`
@@ -39,7 +39,7 @@ type storeDataV2 struct {
 	Version   int                           `json:"version"`
 	Timezone  string                        `json:"timezone,omitempty"`
 	Library   *TrackLibrary                 `json:"library"`
-	Playlists map[string][]*storePlaylistV2 `json:"playlists"`
+	Playlists map[string][]*StorePlaylistV2 `json:"playlists"`
 }
 
 // storeDataV3 is the current on-disk format. It extends v2 with configurable
@@ -49,7 +49,7 @@ type storeDataV3 struct {
 	Timezone  string                        `json:"timezone,omitempty"`
 	TimeSlots []TimeSlot                    `json:"timeSlots"`
 	Library   *TrackLibrary                 `json:"library"`
-	Playlists map[string][]*storePlaylistV2 `json:"playlists"`
+	Playlists map[string][]*StorePlaylistV2 `json:"playlists"`
 }
 
 // Store handles loading and saving the MasterPlaylist to a JSON file on disk.
@@ -97,12 +97,12 @@ func (s *Store) Save(master *MasterPlaylist) error {
 		Timezone:  master.Timezone(),
 		TimeSlots: master.timeSlots,
 		Library:   master.Library,
-		Playlists: make(map[string][]*storePlaylistV2),
+		Playlists: make(map[string][]*StorePlaylistV2),
 	}
 
 	for _, tag := range master.configuredTagsUnsafe() {
 		pls := master.getPlaylistsUnsafe(tag)
-		storePls := make([]*storePlaylistV2, 0, len(pls))
+		storePls := make([]*StorePlaylistV2, 0, len(pls))
 		for _, pl := range pls {
 			sp := playlistToStoreV2(pl)
 			storePls = append(storePls, sp)
@@ -119,7 +119,7 @@ func (s *Store) Save(master *MasterPlaylist) error {
 		if len(pls) == 0 {
 			continue
 		}
-		storePls := make([]*storePlaylistV2, 0, len(pls))
+		storePls := make([]*StorePlaylistV2, 0, len(pls))
 		for _, pl := range pls {
 			storePls = append(storePls, playlistToStoreV2(pl))
 		}
@@ -163,7 +163,7 @@ func (s *Store) Save(master *MasterPlaylist) error {
 
 // playlistToStoreV2 converts a runtime Playlist into the v2 on-disk
 // representation (checksums only, no embedded tracks).
-func playlistToStoreV2(pl *Playlist) *storePlaylistV2 {
+func playlistToStoreV2(pl *Playlist) *StorePlaylistV2 {
 	pl.mu.RLock()
 	defer pl.mu.RUnlock()
 
@@ -172,7 +172,7 @@ func playlistToStoreV2(pl *Playlist) *storePlaylistV2 {
 		checksums[i] = t.Checksum
 	}
 
-	return &storePlaylistV2{
+	return &StorePlaylistV2{
 		ID:                   pl.ID,
 		Name:                 pl.Name,
 		Tag:                  pl.Tag,
@@ -203,8 +203,18 @@ func (s *Store) Load() (*MasterPlaylist, error) {
 	}
 	_ = json.Unmarshal(raw, &versionProbe)
 
+	if versionProbe.Version >= 4 {
+		return s.loadV4(raw)
+	}
 	if versionProbe.Version >= 3 {
-		return s.loadV3(raw)
+		master, err := s.loadV3(raw)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.buildAndSaveV4Locked(master); err != nil {
+			slog.Warn("failed to migrate v3 to v4", "path", s.path, "error", err)
+		}
+		return master, nil
 	}
 	if versionProbe.Version >= 2 {
 		return s.loadV2(raw)
@@ -260,6 +270,71 @@ func (s *Store) loadV3(raw []byte) (*MasterPlaylist, error) {
 	return master, nil
 }
 
+// loadV4 handles the v4 format with multiple channels.
+func (s *Store) loadV4(raw []byte) (*MasterPlaylist, error) {
+	var data StoreDataV4
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, fmt.Errorf("failed to parse v4 playlist file %q: %w", s.path, err)
+	}
+
+	return s.masterFromV4Data(&data)
+}
+
+// masterFromV4Data reconstructs a MasterPlaylist from v4 data using the
+// default channel for backward compatibility.
+func (s *Store) masterFromV4Data(data *StoreDataV4) (*MasterPlaylist, error) {
+	lib := data.Library
+	if lib == nil {
+		lib = NewTrackLibrary()
+	}
+
+	var target *StoreChannelV4
+	for _, ch := range data.Channels {
+		if ch.Slug == data.DefaultChannel {
+			target = ch
+			break
+		}
+	}
+	if target == nil && len(data.Channels) > 0 {
+		target = data.Channels[0]
+	}
+
+	master := NewMasterPlaylistWithLibrary(lib)
+
+	if target != nil {
+		if target.Timezone != "" {
+			if err := master.SetTimezone(target.Timezone); err != nil {
+				slog.Warn("ignoring invalid persisted timezone", "timezone", target.Timezone, "error", err)
+			}
+		}
+
+		if len(target.TimeSlots) > 0 {
+			if err := master.SetTimeSlots(target.TimeSlots); err != nil {
+				slog.Warn("ignoring invalid persisted time slots, using defaults", "error", err)
+			}
+		}
+
+		for tagStr, storePls := range target.Playlists {
+			tag := TimeTag(tagStr)
+			for _, sp := range storePls {
+				pl := storeV2ToPlaylist(sp, tag, lib)
+				master.setPlaylistsUnsafe(tag, append(master.getPlaylistsUnsafe(tag), pl))
+			}
+		}
+	}
+
+	syncPlaylistIDCounter(master)
+
+	slog.Info("playlist loaded from disk (v4)",
+		"path", s.path,
+		"channels", len(data.Channels),
+		"default_channel", data.DefaultChannel,
+		"library_tracks", lib.Count(),
+	)
+
+	return master, nil
+}
+
 // loadV2 handles the legacy v2 format (no time slots).
 func (s *Store) loadV2(raw []byte) (*MasterPlaylist, error) {
 	var data storeDataV2
@@ -305,7 +380,7 @@ func (s *Store) loadV2(raw []byte) (*MasterPlaylist, error) {
 
 // storeV2ToPlaylist converts a v2 on-disk playlist back into a runtime
 // Playlist, resolving track checksums from the library.
-func storeV2ToPlaylist(sp *storePlaylistV2, tag TimeTag, lib *TrackLibrary) *Playlist {
+func storeV2ToPlaylist(sp *StorePlaylistV2, tag TimeTag, lib *TrackLibrary) *Playlist {
 	tracks := lib.Resolve(sp.TrackChecksums)
 
 	pl := &Playlist{
@@ -400,6 +475,226 @@ func nonNilPlaylists(pls []*Playlist) []*Playlist {
 		return make([]*Playlist, 0)
 	}
 	return pls
+}
+
+// saveV4Locked atomically writes v4 JSON data to disk. The caller must hold
+// s.mu.
+func (s *Store) saveV4Locked(data *StoreDataV4) error {
+	jsonBytes, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal v4 playlist data: %w", err)
+	}
+
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, "playlist-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(jsonBytes); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpName, s.path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("failed to rename temp file to %q: %w", s.path, err)
+	}
+
+	slog.Info("playlist saved to disk (v4)", "path", s.path, "channels", len(data.Channels))
+	return nil
+}
+
+// SaveV4 serialises the given v4 data to JSON and writes it to disk atomically.
+func (s *Store) SaveV4(data *StoreDataV4) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveV4Locked(data)
+}
+
+// LoadV4 reads the v4 JSON file from disk and returns the raw v4 data.
+// It returns an error if the file does not exist or is not valid v4.
+func (s *Store) LoadV4() (*StoreDataV4, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read playlist file %q: %w", s.path, err)
+	}
+
+	var data StoreDataV4
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, fmt.Errorf("failed to parse v4 playlist file %q: %w", s.path, err)
+	}
+
+	if data.Version < 4 {
+		return nil, fmt.Errorf("playlist file %q is not v4 (version %d)", s.path, data.Version)
+	}
+
+	return &data, nil
+}
+
+// LoadChannels reads the store file and returns channel snapshots for v4 data.
+// If the file does not exist, is not v4, or has no channels, it returns nil
+// snapshots so the caller can create defaults.
+func (s *Store) LoadChannels() (*TrackLibrary, string, []*ChannelSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	var versionProbe struct {
+		Version int `json:"version"`
+	}
+	_ = json.Unmarshal(raw, &versionProbe)
+
+	if versionProbe.Version < 4 {
+		return nil, "", nil, fmt.Errorf("not v4")
+	}
+
+	var data StoreDataV4
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, "", nil, fmt.Errorf("failed to parse v4 playlist file %q: %w", s.path, err)
+	}
+
+	lib := data.Library
+	if lib == nil {
+		lib = NewTrackLibrary()
+	}
+
+	var snapshots []*ChannelSnapshot
+	for _, ch := range data.Channels {
+		snap := &ChannelSnapshot{
+			ID:          ch.ID,
+			Slug:        ch.Slug,
+			Name:        ch.Name,
+			Description: ch.Description,
+			SortOrder:   ch.SortOrder,
+			Enabled:     ch.Enabled,
+			Bitrate:     ch.Bitrate,
+			Timezone:    ch.Timezone,
+			TimeSlots:   ch.TimeSlots,
+			Playlists:   make(map[TimeTag][]*Playlist),
+		}
+		for tagStr, storePls := range ch.Playlists {
+			tag := TimeTag(tagStr)
+			var pls []*Playlist
+			for _, sp := range storePls {
+				pls = append(pls, storeV2ToPlaylist(sp, tag, lib))
+			}
+			snap.Playlists[tag] = pls
+		}
+		snapshots = append(snapshots, snap)
+	}
+
+	return lib, data.DefaultChannel, snapshots, nil
+}
+
+// SaveChannels persists channel snapshots in v4 format atomically.
+func (s *Store) SaveChannels(lib *TrackLibrary, defaultSlug string, snapshots []*ChannelSnapshot) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data := &StoreDataV4{
+		Version:        4,
+		DefaultChannel: defaultSlug,
+		Library:        lib,
+		Channels:       make([]*StoreChannelV4, 0, len(snapshots)),
+	}
+
+	for _, snap := range snapshots {
+		ch := &StoreChannelV4{
+			ID:          snap.ID,
+			Slug:        snap.Slug,
+			Name:        snap.Name,
+			Description: snap.Description,
+			SortOrder:   snap.SortOrder,
+			Enabled:     snap.Enabled,
+			Bitrate:     snap.Bitrate,
+			Timezone:    snap.Timezone,
+			TimeSlots:   snap.TimeSlots,
+			Playlists:   make(map[string][]*StorePlaylistV2),
+		}
+		for tag, pls := range snap.Playlists {
+			for _, pl := range pls {
+				ch.Playlists[string(tag)] = append(ch.Playlists[string(tag)], playlistToStoreV2(pl))
+			}
+		}
+		data.Channels = append(data.Channels, ch)
+	}
+
+	return s.saveV4Locked(data)
+}
+
+// buildAndSaveV4Locked wraps a MasterPlaylist into a single v4 channel and
+// persists it. The caller must hold s.mu.
+func (s *Store) buildAndSaveV4Locked(master *MasterPlaylist) error {
+	master.mu.RLock()
+
+	ch := &StoreChannelV4{
+		ID:          "main",
+		Slug:        "main",
+		Name:        "Main Channel",
+		Description: "",
+		SortOrder:   0,
+		Enabled:     true,
+		Bitrate:     "",
+		Timezone:    master.Timezone(),
+		TimeSlots:   master.timeSlots,
+		Playlists:   make(map[string][]*StorePlaylistV2),
+	}
+
+	for _, tag := range master.configuredTagsUnsafe() {
+		pls := master.getPlaylistsUnsafe(tag)
+		storePls := make([]*StorePlaylistV2, 0, len(pls))
+		for _, pl := range pls {
+			storePls = append(storePls, playlistToStoreV2(pl))
+		}
+		ch.Playlists[string(tag)] = storePls
+	}
+
+	for tag, pls := range master.playlists {
+		if _, exists := ch.Playlists[string(tag)]; exists {
+			continue
+		}
+		if len(pls) == 0 {
+			continue
+		}
+		storePls := make([]*StorePlaylistV2, 0, len(pls))
+		for _, pl := range pls {
+			storePls = append(storePls, playlistToStoreV2(pl))
+		}
+		ch.Playlists[string(tag)] = storePls
+	}
+
+	data := &StoreDataV4{
+		Version:        4,
+		DefaultChannel: "main",
+		Channels:       []*StoreChannelV4{ch},
+		Library:        master.Library,
+	}
+
+	master.mu.RUnlock()
+
+	return s.saveV4Locked(data)
+}
+
+// MigrateV3ToV4 writes the given MasterPlaylist as a single v4 channel.
+func (s *Store) MigrateV3ToV4(master *MasterPlaylist) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buildAndSaveV4Locked(master)
 }
 
 // syncPlaylistIDCounter scans all playlists in the master and updates the
@@ -541,12 +836,12 @@ func ExportMasterPlaylist(master *MasterPlaylist) ([]byte, error) {
 		Timezone:  master.Timezone(),
 		TimeSlots: master.timeSlots,
 		Library:   master.Library,
-		Playlists: make(map[string][]*storePlaylistV2),
+		Playlists: make(map[string][]*StorePlaylistV2),
 	}
 
 	for _, tag := range master.configuredTagsUnsafe() {
 		pls := master.getPlaylistsUnsafe(tag)
-		storePls := make([]*storePlaylistV2, 0, len(pls))
+		storePls := make([]*StorePlaylistV2, 0, len(pls))
 		for _, pl := range pls {
 			storePls = append(storePls, playlistToStoreV2(pl))
 		}

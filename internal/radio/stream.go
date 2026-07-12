@@ -2,6 +2,7 @@ package radio
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -9,8 +10,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/arung-agamani/denpa-radio/internal/apierror"
+	"github.com/arung-agamani/denpa-radio/internal/apiresponse"
 	"github.com/arung-agamani/denpa-radio/internal/ffmpeg"
 	"github.com/arung-agamani/denpa-radio/internal/playlist"
+	"github.com/gin-gonic/gin"
 )
 
 // clientSub represents a single subscribed listener.
@@ -256,6 +260,14 @@ func NewStreamHandler(broadcaster *Broadcaster, stationName string, maxClients i
 }
 
 func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	serveStream(w, r, h.broadcaster, h.stationName, h.maxClients)
+}
+
+func (h *StreamHandler) GetActiveClients() int {
+	return h.broadcaster.ActiveClients()
+}
+
+func serveStream(w http.ResponseWriter, r *http.Request, broadcaster *Broadcaster, stationName string, maxClients int32) {
 	// For HEAD requests, return only the response headers — no subscription,
 	// no body. This lets clients (e.g. Lavalink) probe the stream without
 	// consuming a listener slot or entering the broadcast loop.
@@ -267,20 +279,20 @@ func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Enforce client limit.
-	active := int32(h.broadcaster.ActiveClients())
-	if active >= h.maxClients {
+	active := int32(broadcaster.ActiveClients())
+	if active >= maxClients {
 		http.Error(w, "Too many clients", http.StatusServiceUnavailable)
-		slog.Warn("Client rejected", "reason", "max_clients_reached", "max", h.maxClients)
+		slog.Warn("Client rejected", "reason", "max_clients_reached", "max", maxClients)
 		return
 	}
 
 	clientIP := r.RemoteAddr
-	sub := h.broadcaster.Subscribe()
-	slog.Info("Client connected", "ip", clientIP, "active_clients", h.broadcaster.ActiveClients())
+	sub := broadcaster.Subscribe()
+	slog.Info("Client connected", "ip", clientIP, "active_clients", broadcaster.ActiveClients())
 
 	defer func() {
-		h.broadcaster.Unsubscribe(sub)
-		slog.Info("Client disconnected", "ip", clientIP, "active_clients", h.broadcaster.ActiveClients())
+		broadcaster.Unsubscribe(sub)
+		slog.Info("Client disconnected", "ip", clientIP, "active_clients", broadcaster.ActiveClients())
 	}()
 
 	// Set response headers for an infinite MP3 stream.
@@ -295,7 +307,7 @@ func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// transfer encoding). By default we serve clean HTTP; ICY-aware clients
 	// that send the header get the extra metadata.
 	if r.Header.Get("Icy-MetaData") != "" {
-		w.Header().Set("icy-name", h.stationName)
+		w.Header().Set("icy-name", stationName)
 		w.Header().Set("icy-br", "128")
 	}
 
@@ -322,6 +334,64 @@ func (h *StreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *StreamHandler) GetActiveClients() int {
-	return h.broadcaster.ActiveClients()
+// ChannelStreamHandler serves per-channel streams at /stream/:slug.
+type ChannelStreamHandler struct {
+	channelManager *ChannelManager
+	stationName    string
+	maxClients     int32
+}
+
+// NewChannelStreamHandler creates a handler that resolves a slug to a Channel
+// and streams from that channel's Broadcaster.
+func NewChannelStreamHandler(cm *ChannelManager, stationName string, maxClients int) *ChannelStreamHandler {
+	return &ChannelStreamHandler{
+		channelManager: cm,
+		stationName:    stationName,
+		maxClients:     int32(maxClients),
+	}
+}
+
+// Handle is the Gin handler for GET /stream/:slug.
+func (h *ChannelStreamHandler) Handle(c *gin.Context) {
+	slug := c.Param("slug")
+	if slug == "" {
+		apiresponse.Error(c, apierror.ErrValidation("slug is required"))
+		return
+	}
+
+	ch := h.channelManager.Get(slug)
+	if ch == nil {
+		apiresponse.Error(c, apierror.ErrNotFound(fmt.Sprintf("channel %q not found", slug)))
+		return
+	}
+
+	if !ch.Enabled {
+		apiresponse.Error(c, apierror.ErrForbidden(fmt.Sprintf("channel %q is disabled", slug)))
+		return
+	}
+
+	if ch.Broadcaster == nil {
+		apiresponse.Error(c, apierror.ErrInternal(fmt.Sprintf("channel %q broadcaster not initialized", slug)))
+		return
+	}
+
+	serveStream(c.Writer, c.Request, ch.Broadcaster, h.stationName, h.maxClients)
+}
+
+// NewRedirectToDefaultStreamHandler returns a Gin handler that redirects
+// GET /stream to /stream/:defaultSlug.
+func NewRedirectToDefaultStreamHandler(cm *ChannelManager) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defaultCh := cm.DefaultChannel()
+		if defaultCh == nil {
+			apiresponse.Error(c, apierror.ErrInternal("no default channel configured"))
+			return
+		}
+		ch, ok := defaultCh.(*Channel)
+		if !ok {
+			apiresponse.Error(c, apierror.ErrInternal("default channel type mismatch"))
+			return
+		}
+		c.Redirect(http.StatusFound, "/stream/"+ch.Slug)
+	}
 }

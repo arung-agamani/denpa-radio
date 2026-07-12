@@ -116,7 +116,7 @@ func (h *LibraryHandlers) EnrichAll(c *gin.Context) {
 // Reconcile handles POST /api/reconcile  (protected)
 func (h *LibraryHandlers) Reconcile(c *gin.Context) {
 	slog.Info("Reconcile requested", "remote", c.ClientIP())
-	result, err := h.svc.Reconcile()
+	result, err := h.svc.Reconcile(c.Query("channel"))
 	if err != nil {
 		slog.Error("Reconciliation failed", "error", err)
 		apiresponse.Error(c, apierror.ErrInternal("reconciliation failed"))

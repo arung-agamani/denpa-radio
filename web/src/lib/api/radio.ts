@@ -1,4 +1,4 @@
-import { request } from "./client";
+import { request, buildQuery } from "./client";
 
 // ---------------------------------------------------------------------------
 // Public status
@@ -36,8 +36,8 @@ export interface RadioStatus {
     server_time: string;
 }
 
-export async function getStatus(): Promise<RadioStatus> {
-    return request<RadioStatus>("GET", "/api/status", null, { noAuth: true });
+export async function getStatus(channel?: string): Promise<RadioStatus> {
+    return request<RadioStatus>("GET", `/api/status${buildQuery({ channel })}`, null, { noAuth: true });
 }
 
 export async function getHealth(): Promise<unknown> {
@@ -48,20 +48,20 @@ export async function getHealth(): Promise<unknown> {
 // Queue
 // ---------------------------------------------------------------------------
 
-export async function getQueue(): Promise<{ tracks: TrackInfo[] }> {
-    return request<{ tracks: TrackInfo[] }>("GET", "/api/queue", null, { noAuth: true });
+export async function getQueue(channel?: string): Promise<{ tracks: TrackInfo[] }> {
+    return request<{ tracks: TrackInfo[] }>("GET", `/api/queue${buildQuery({ channel })}`, null, { noAuth: true });
 }
 
 // ---------------------------------------------------------------------------
 // Skip controls (protected)
 // ---------------------------------------------------------------------------
 
-export async function skipNext(): Promise<void> {
-    await request("POST", "/api/skip/next");
+export async function skipNext(channel?: string): Promise<void> {
+    await request("POST", `/api/skip/next${buildQuery({ channel })}`);
 }
 
-export async function skipPrev(): Promise<void> {
-    await request("POST", "/api/skip/prev");
+export async function skipPrev(channel?: string): Promise<void> {
+    await request("POST", `/api/skip/prev${buildQuery({ channel })}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -77,8 +77,8 @@ export interface SchedulerStatus {
     summary: Record<string, unknown>;
 }
 
-export async function getSchedulerStatus(): Promise<SchedulerStatus> {
-    return request<SchedulerStatus>("GET", "/api/scheduler/status", null, { noAuth: true });
+export async function getSchedulerStatus(channel?: string): Promise<SchedulerStatus> {
+    return request<SchedulerStatus>("GET", `/api/scheduler/status${buildQuery({ channel })}`, null, { noAuth: true });
 }
 
 // ---------------------------------------------------------------------------

@@ -1,13 +1,26 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { isPlaying, currentTrackInfo, stationName } from '$lib/stores';
+  import { isPlaying, currentTrackInfo, stationName, selectedChannel } from '$lib/stores';
 
   let audioEl: HTMLAudioElement | undefined = $state(undefined);
   let volume = $state(0.8);
   let loading = $state(false);
   let error: string | null = $state(null);
 
-  const streamUrl = '/stream';
+  const streamUrl = $derived(`/stream/${$selectedChannel}`);
+
+  let prevStreamUrl = '';
+  $effect(() => {
+    if (streamUrl !== prevStreamUrl) {
+      prevStreamUrl = streamUrl;
+      if ($isPlaying && audioEl) {
+        audioEl.src = streamUrl;
+        audioEl.load();
+        audioEl.volume = volume;
+        audioEl.play().catch(() => {});
+      }
+    }
+  });
 
   // Stall / reconnect logic
   const STALL_TIMEOUT_MS = 5000;

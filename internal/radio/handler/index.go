@@ -12,6 +12,7 @@ type HandlerDeps struct {
 	TimezoneH *TimezoneHandlers
 	AuthH     *AuthHandlers
 	SpaH      *SPAHandler
+	ChannelH  *ChannelHandlers
 }
 
 // RegisterRoutes wires all routes onto the gin engine.
@@ -46,12 +47,26 @@ func RegisterRoutes(engine *gin.Engine, authMiddleware gin.HandlerFunc, deps Han
 
 		api.GET("/playlists", deps.PlaylistH.List)
 		api.GET("/playlists/:id", deps.PlaylistH.GetByID)
+
+		api.GET("/channels", deps.ChannelH.List)
+		api.GET("/channels/:slug", deps.ChannelH.Get)
+		api.GET("/channels/:slug/status", deps.ChannelH.GetStatus)
+		api.GET("/channels/:slug/queue", deps.ChannelH.GetQueue)
 	}
 
 	// --- Protected API (JWT required) ---
 	protected := engine.Group("/api")
 	protected.Use(authMiddleware)
 	{
+		protected.POST("/channels", deps.ChannelH.Create)
+		protected.PUT("/channels/:slug", deps.ChannelH.Update)
+		protected.DELETE("/channels/:slug", deps.ChannelH.Delete)
+		protected.PUT("/channels/:slug/master/:tag", deps.ChannelH.AssignPlaylistToTag)
+		protected.DELETE("/channels/:slug/master/:tag/:playlistId", deps.ChannelH.RemovePlaylistFromTag)
+		protected.PUT("/channels/:slug/timeslots", deps.ChannelH.SetTimeSlots)
+		protected.POST("/channels/:slug/skip/next", deps.ChannelH.SkipNext)
+		protected.POST("/channels/:slug/skip/prev", deps.ChannelH.SkipPrev)
+
 		// Track management
 		protected.GET("/tracks/orphaned", deps.TrackH.ListOrphaned)
 		protected.PUT("/tracks/:id", deps.TrackH.Update)

@@ -21,6 +21,9 @@ export type { Playlist, TrackItem, PlaylistListResponse, AddTrackOptions, Export
 export { getMasterPlaylist, assignPlaylistToTag, removePlaylistFromTag, getTimeSlots, setTimeSlots } from "./master";
 export type { TimeSlot, TagEntry, MasterPlaylist } from "./master";
 
+export { listChannels, getChannel, getChannelStatus, getChannelQueue, createChannel, updateChannel, deleteChannel, assignPlaylistToChannelTag, removePlaylistFromChannelTag, setChannelTimeSlots, skipNextChannel, skipPrevChannel } from "./channels";
+export type { ChannelInfo, ChannelDetail, ChannelStatus, CreateChannelBody, UpdateChannelBody, ChannelListResponse } from "./channels";
+
 export { uploadTrack } from "./upload";
 export type { UploadMeta, UploadOptions, UploadResult } from "./upload";
 

@@ -9,6 +9,7 @@
 
   const sections = [
     { id: 'dashboard', label: 'Dashboard', icon: '📊', href: '/dj' },
+    { id: 'channels', label: 'Channels', icon: '📻', href: '/dj/channels' },
     { id: 'library', label: 'Library', icon: '📚', href: '/dj/library/albums' },
     { id: 'playlists', label: 'Playlists', icon: '🎵', href: '/dj/playlists' },
     { id: 'master', label: 'Master Playlist', icon: '🕐', href: '/dj/master' },
@@ -21,7 +22,9 @@
   // Derive the active section from the URL
   let currentPath = $derived($page.url.pathname);
   let activeSection = $derived(
-    sections.find(s => currentPath === s.href || currentPath.startsWith(s.href + '/'))?.id || 'dashboard'
+    sections
+      .filter(s => currentPath === s.href || currentPath.startsWith(s.href + '/'))
+      .sort((a, b) => b.href.length - a.href.length)[0]?.id || 'dashboard'
   );
 
   function selectSection(href: string): void {

@@ -25,7 +25,11 @@ func (h *RadioHandlers) Health(c *gin.Context) {
 
 // Status handles GET /api/status
 func (h *RadioHandlers) Status(c *gin.Context) {
-	snap := h.svc.Status()
+	snap, err := h.svc.Status(c.Query("channel"))
+	if err != nil {
+		apiresponse.ErrorFromErr(c, err)
+		return
+	}
 	var currentTrackInfo interface{}
 	if snap.CurrentTrackRaw != nil {
 		currentTrackInfo = sanitiseTrack(snap.CurrentTrackRaw)
@@ -50,7 +54,11 @@ func (h *RadioHandlers) Status(c *gin.Context) {
 
 // SchedulerStatus handles GET /api/scheduler/status
 func (h *RadioHandlers) SchedulerStatus(c *gin.Context) {
-	snap := h.svc.SchedulerStatus()
+	snap, err := h.svc.SchedulerStatus(c.Query("channel"))
+	if err != nil {
+		apiresponse.ErrorFromErr(c, err)
+		return
+	}
 	apiresponse.OK(c, gin.H{
 		"running":        snap.Running,
 		"last_tag":       snap.LastTag,
@@ -65,7 +73,11 @@ func (h *RadioHandlers) SchedulerStatus(c *gin.Context) {
 
 // GetQueue handles GET /api/queue  (public)
 func (h *RadioHandlers) GetQueue(c *gin.Context) {
-	tracks := h.svc.GetQueue(0)
+	tracks, err := h.svc.GetQueue(c.Query("channel"), 0)
+	if err != nil {
+		apiresponse.ErrorFromErr(c, err)
+		return
+	}
 	apiresponse.OK(c, gin.H{
 		"tracks": sanitiseTracks(tracks),
 	})
@@ -73,13 +85,16 @@ func (h *RadioHandlers) GetQueue(c *gin.Context) {
 
 // SkipNext handles POST /api/skip/next  (protected)
 func (h *RadioHandlers) SkipNext(c *gin.Context) {
-	h.svc.SkipNext()
+	if err := h.svc.SkipNext(c.Query("channel")); err != nil {
+		apiresponse.ErrorFromErr(c, err)
+		return
+	}
 	apiresponse.OK(c, gin.H{})
 }
 
 // SkipPrev handles POST /api/skip/prev  (protected)
 func (h *RadioHandlers) SkipPrev(c *gin.Context) {
-	if err := h.svc.SkipPrev(); err != nil {
+	if err := h.svc.SkipPrev(c.Query("channel")); err != nil {
 		apiresponse.ErrorFromErr(c, err)
 		return
 	}

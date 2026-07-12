@@ -1,4 +1,4 @@
-import { writable, derived } from "svelte/store";
+import { writable, derived, get } from "svelte/store";
 import type { Readable, Writable } from "svelte/store";
 import {
     getStatus,
@@ -6,8 +6,55 @@ import {
     listPlaylists,
     getMasterPlaylist,
     getSchedulerStatus,
+    listChannels,
 } from "./api";
-import type { RadioStatus, Track, Playlist, MasterPlaylist, SchedulerStatus, TimeSlot } from "./api";
+import type { RadioStatus, Track, Playlist, MasterPlaylist, SchedulerStatus, TimeSlot, ChannelInfo } from "./api";
+
+// ---------------------------------------------------------------------------
+// Channels (refreshed on demand)
+// ---------------------------------------------------------------------------
+
+interface ChannelsStore extends Readable<ChannelInfo[]> {
+    refresh(): Promise<void>;
+}
+
+function createChannelsStore(): ChannelsStore {
+    const { subscribe, set } = writable<ChannelInfo[]>([]);
+
+    async function refresh(): Promise<void> {
+        try {
+            const data = await listChannels();
+            set(data.channels || []);
+        } catch (err) {
+            console.warn("Failed to fetch channels:", err);
+        }
+    }
+
+    return { subscribe, refresh };
+}
+
+export const channels = createChannelsStore();
+
+// ---------------------------------------------------------------------------
+// Selected channel (persisted to localStorage)
+// ---------------------------------------------------------------------------
+
+const SELECTED_CHANNEL_KEY = "denpa_selected_channel";
+
+function getInitialChannel(): string {
+    if (typeof localStorage !== "undefined") {
+        return localStorage.getItem(SELECTED_CHANNEL_KEY) || "main";
+    }
+    return "main";
+}
+
+export const selectedChannel = writable<string>(getInitialChannel());
+
+if (typeof localStorage !== "undefined") {
+    selectedChannel.subscribe((value) => {
+        localStorage.setItem(SELECTED_CHANNEL_KEY, value);
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Radio status (polled periodically)
@@ -41,7 +88,7 @@ function createStatusStore(): StatusStore {
 
     async function refresh(): Promise<void> {
         try {
-            const data = await getStatus();
+            const data = await getStatus(get(selectedChannel));
             set(data);
         } catch (err) {
             console.warn("Failed to fetch status:", err);

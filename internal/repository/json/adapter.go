@@ -43,6 +43,18 @@ func (a *JSONAdapter) Master() *playlist.MasterPlaylist {
 	return a.master
 }
 
+// SetMaster replaces the cached master playlist. Safe for concurrent use.
+func (a *JSONAdapter) SetMaster(master *playlist.MasterPlaylist) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.master = master
+}
+
+// MasterPlaylist satisfies repository.MasterPlaylistRepository.
+func (a *JSONAdapter) MasterPlaylist() *playlist.MasterPlaylist {
+	return a.Master()
+}
+
 // Load reads the persisted JSON file and caches the resulting MasterPlaylist.
 func (a *JSONAdapter) Load() error {
 	master, err := a.store.Load()

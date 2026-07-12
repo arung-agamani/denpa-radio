@@ -120,5 +120,20 @@ export class ApiError extends Error {
     }
 }
 
+/**
+ * Build a URL query string from a record of params.
+ * - Skips entries whose value is `undefined` or empty string.
+ * - Returns "" (not "?") when no params survive, so callers can interpolate as `${path}${qs}`.
+ * - Values are coerced via `String()` and URL-encoded.
+ */
+function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
+    const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== "");
+    if (entries.length === 0) return "";
+    const qs = entries
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+        .join("&");
+    return `?${qs}`;
+}
+
 export type { RequestOptions };
-export { getToken, authHeaders, request };
+export { getToken, authHeaders, request, buildQuery };

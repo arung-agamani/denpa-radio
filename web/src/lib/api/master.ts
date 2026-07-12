@@ -1,4 +1,4 @@
-import { request } from "./client";
+import { request, buildQuery } from "./client";
 import type { Playlist } from "./playlists";
 
 // ---------------------------------------------------------------------------
@@ -29,26 +29,33 @@ export interface MasterPlaylist {
     time_slots: TimeSlot[];
 }
 
-export async function getMasterPlaylist(): Promise<MasterPlaylist> {
-    return request<MasterPlaylist>("GET", "/api/master", null, { noAuth: true });
+export async function getMasterPlaylist(channel?: string): Promise<MasterPlaylist> {
+    return request<MasterPlaylist>("GET", `/api/master${buildQuery({ channel })}`, null, { noAuth: true });
 }
 
-export async function assignPlaylistToTag(tag: string, playlistId: number): Promise<void> {
-    await request("PUT", `/api/master/${tag}`, { playlistId });
+export async function assignPlaylistToTag(tag: string, playlistId: number, channel?: string): Promise<void> {
+    await request("PUT", `/api/master/${tag}${buildQuery({ channel })}`, { playlistId });
 }
 
-export async function removePlaylistFromTag(tag: string, playlistId: number): Promise<void> {
-    await request("DELETE", `/api/master/${tag}/${playlistId}`);
+export async function removePlaylistFromTag(tag: string, playlistId: number, channel?: string): Promise<void> {
+    await request("DELETE", `/api/master/${tag}/${playlistId}${buildQuery({ channel })}`);
 }
 
 // ---------------------------------------------------------------------------
 // Time Slots (configurable schedule)
 // ---------------------------------------------------------------------------
 
-export async function getTimeSlots(): Promise<{ timeSlots: TimeSlot[] }> {
-    return request<{ timeSlots: TimeSlot[] }>("GET", "/api/timeslots", null, { noAuth: true });
+export async function getTimeSlots(channel?: string): Promise<{ timeSlots: TimeSlot[] }> {
+    return request<{ timeSlots: TimeSlot[] }>("GET", `/api/timeslots${buildQuery({ channel })}`, null, { noAuth: true });
 }
 
-export async function setTimeSlots(timeSlots: TimeSlot[]): Promise<{ message: string; timeSlots: TimeSlot[] }> {
-    return request<{ message: string; timeSlots: TimeSlot[] }>("PUT", "/api/timeslots", { timeSlots });
+export async function setTimeSlots(
+    timeSlots: TimeSlot[],
+    channel?: string,
+): Promise<{ message: string; timeSlots: TimeSlot[] }> {
+    return request<{ message: string; timeSlots: TimeSlot[] }>(
+        "PUT",
+        `/api/timeslots${buildQuery({ channel })}`,
+        { timeSlots },
+    );
 }

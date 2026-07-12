@@ -760,3 +760,29 @@ func (mp *MasterPlaylist) IsEmpty() bool {
 	}
 	return true
 }
+
+// MasterPlaylist returns the receiver itself so that *MasterPlaylist satisfies
+// repository.MasterPlaylistRepository when accessed via the MasterPlaylist() method.
+func (mp *MasterPlaylist) MasterPlaylist() *MasterPlaylist {
+	return mp
+}
+
+// Save is a no-op for the in-memory MasterPlaylist. Persistence is handled
+// by the store/adapter layer.
+func (mp *MasterPlaylist) Save() error {
+	return nil
+}
+
+// Load is a no-op for the in-memory MasterPlaylist. Loading is handled
+// by the store/adapter layer.
+func (mp *MasterPlaylist) Load() error {
+	return nil
+}
+
+// Exists always returns false for the in-memory MasterPlaylist.
+// The store/adapter layer tracks file existence.
+func (mp *MasterPlaylist) Exists() bool {
+	return false
+}
+
+

@@ -56,7 +56,7 @@ func (h *PlaylistHandlers) Create(c *gin.Context) {
 		apiresponse.Error(c, apierror.ErrValidation("invalid request body"))
 		return
 	}
-	pl, err := h.svc.Create(body.Name, body.Tag)
+	pl, err := h.svc.Create(body.Name, body.Tag, c.Query("channel"))
 	if err != nil {
 		apiresponse.ErrorFromErr(c, err)
 		return
@@ -79,7 +79,7 @@ func (h *PlaylistHandlers) Update(c *gin.Context) {
 		apiresponse.Error(c, apierror.ErrValidation("invalid request body"))
 		return
 	}
-	pl, err := h.svc.Update(id, body.Name, body.Tag)
+	pl, err := h.svc.Update(id, body.Name, body.Tag, c.Query("channel"))
 	if err != nil {
 		apiresponse.ErrorFromErr(c, err)
 		return
@@ -94,7 +94,7 @@ func (h *PlaylistHandlers) Delete(c *gin.Context) {
 		apiresponse.Error(c, apierror.ErrValidation("invalid playlist ID"))
 		return
 	}
-	if err := h.svc.Delete(id); err != nil {
+	if err := h.svc.Delete(id, c.Query("channel")); err != nil {
 		apiresponse.ErrorFromErr(c, err)
 		return
 	}
@@ -124,7 +124,7 @@ func (h *PlaylistHandlers) AddTrack(c *gin.Context) {
 		Checksum:   body.Checksum,
 		FilePath:   body.FilePath,
 		Index:      body.Index,
-	})
+	}, c.Query("channel"))
 	if err != nil {
 		apiresponse.ErrorFromErr(c, err)
 		return
@@ -144,7 +144,7 @@ func (h *PlaylistHandlers) RemoveTrack(c *gin.Context) {
 		apiresponse.Error(c, apierror.ErrValidation("invalid track ID"))
 		return
 	}
-	removed, pl, err := h.svc.RemoveTrack(plID, trackID)
+	removed, pl, err := h.svc.RemoveTrack(plID, trackID, c.Query("channel"))
 	if err != nil {
 		apiresponse.ErrorFromErr(c, err)
 		return
@@ -167,7 +167,7 @@ func (h *PlaylistHandlers) MoveTrack(c *gin.Context) {
 		apiresponse.Error(c, apierror.ErrValidation("invalid request body"))
 		return
 	}
-	pl, err := h.svc.MoveTrack(plID, body.From, body.To)
+	pl, err := h.svc.MoveTrack(plID, body.From, body.To, c.Query("channel"))
 	if err != nil {
 		apiresponse.ErrorFromErr(c, err)
 		return
@@ -182,7 +182,7 @@ func (h *PlaylistHandlers) Shuffle(c *gin.Context) {
 		apiresponse.Error(c, apierror.ErrValidation("invalid playlist ID"))
 		return
 	}
-	pl, err := h.svc.Shuffle(plID)
+	pl, err := h.svc.Shuffle(plID, c.Query("channel"))
 	if err != nil {
 		apiresponse.ErrorFromErr(c, err)
 		return
@@ -222,7 +222,7 @@ func (h *PlaylistHandlers) Import(c *gin.Context) {
 		apiresponse.Error(c, apierror.ErrValidation("request body too large or unreadable"))
 		return
 	}
-	pl, err := h.svc.Import(data)
+	pl, err := h.svc.Import(data, c.Query("channel"))
 	if err != nil {
 		slog.Warn("Failed to import playlist", "error", err)
 		apiresponse.Error(c, apierror.ErrValidation("invalid playlist data"))
@@ -238,7 +238,11 @@ func (h *PlaylistHandlers) Import(c *gin.Context) {
 
 // Get handles GET /api/master
 func (h *PlaylistHandlers) Get(c *gin.Context) {
-	snap := h.masterSvc.Get()
+	snap, err := h.masterSvc.Get(c.Query("channel"))
+	if err != nil {
+		apiresponse.ErrorFromErr(c, err)
+		return
+	}
 	apiresponse.OK(c, gin.H{
 		"active_tag":         snap.ActiveTag,
 		"active_playlist_id": snap.ActivePlaylistID,
@@ -258,7 +262,7 @@ func (h *PlaylistHandlers) AssignPlaylistToTag(c *gin.Context) {
 		apiresponse.Error(c, apierror.ErrValidation("invalid request body"))
 		return
 	}
-	if err := h.masterSvc.AssignPlaylistToTag(body.PlaylistID, tagStr); err != nil {
+	if err := h.masterSvc.AssignPlaylistToTag(c.Query("channel"), body.PlaylistID, tagStr); err != nil {
 		slog.Error("Failed to assign playlist to tag", "error", err)
 		apiresponse.ErrorFromErr(c, err)
 		return
@@ -274,7 +278,7 @@ func (h *PlaylistHandlers) RemovePlaylistFromTag(c *gin.Context) {
 		apiresponse.Error(c, apierror.ErrValidation("invalid playlist ID"))
 		return
 	}
-	if err := h.masterSvc.RemovePlaylistFromTag(tagStr, plID); err != nil {
+	if err := h.masterSvc.RemovePlaylistFromTag(c.Query("channel"), tagStr, plID); err != nil {
 		apiresponse.ErrorFromErr(c, err)
 		return
 	}
@@ -283,7 +287,11 @@ func (h *PlaylistHandlers) RemovePlaylistFromTag(c *gin.Context) {
 
 // GetTimeSlots handles GET /api/timeslots
 func (h *PlaylistHandlers) GetTimeSlots(c *gin.Context) {
-	slots := h.masterSvc.GetTimeSlots()
+	slots, err := h.masterSvc.GetTimeSlots(c.Query("channel"))
+	if err != nil {
+		apiresponse.ErrorFromErr(c, err)
+		return
+	}
 	apiresponse.OK(c, gin.H{"timeSlots": slots})
 }
 
@@ -312,7 +320,7 @@ func (h *PlaylistHandlers) SetTimeSlots(c *gin.Context) {
 		}
 	}
 
-	if err := h.masterSvc.SetTimeSlots(slots); err != nil {
+	if err := h.masterSvc.SetTimeSlots(c.Query("channel"), slots); err != nil {
 		slog.Error("Failed to set time slots", "error", err)
 		apiresponse.ErrorFromErr(c, err)
 		return
